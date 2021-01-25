@@ -1,0 +1,20 @@
+[package]
+name = "day1-sf"
+version = "0.1.0"
+authors = ["Shaked Flur <sflur@google.com>"]
+edition = "2018"
+
+[dependencies]
+num-traits = "0.2"
+num-bigint = "0.3"
+
+[target.'cfg(not(verify))'.dependencies]
+proptest = { version = "0.10" }
+
+[target.'cfg(verify)'.dependencies]
+propverify = { path="/home/rust-verification-tools/propverify" }
+# propverify = { path="../../../../propverify" }
+
+[features]
+verifier-klee = ["propverify/verifier-klee"]
+verifier-crux = ["propverify/verifier-crux"]
