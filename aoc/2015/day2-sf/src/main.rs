@@ -224,10 +224,10 @@ mod test_elaborated_spec {
 
 #[cfg(test)]
 mod tests_concise {
-    #[cfg(not(verify))]
-    use proptest::prelude::*;
     #[cfg(verify)]
-    use propverify::prelude::*;
+    use propverify as proptest;
+
+    use proptest::prelude::*;
 
     use crate::{present::Present, ribbon, wrap};
     use std::{
@@ -292,11 +292,9 @@ mod tests_concise {
                             head in arb_present()) {
             // Assuming we have already checked wrap for vecs of size
             // `tail.len()`, `wrap(&tail)` is equivalent to its spec. Hence we
-            // can use it in `spec` for `ps` below.
+            // can use it in `spec` for the concat below.
             let spec = present_wrap_spec(head) + wrap(&tail);
-            let mut ps = tail;
-            ps.push(head);
-            prop_assert_eq!(wrap(&ps), spec);
+            prop_assert_eq!(wrap(&[vec![head], tail].concat()), spec);
         }
     }
 
@@ -310,9 +308,7 @@ mod tests_concise {
         fn ribbon_case2(tail in proptest::collection::vec(arb_present(), 0..1000),
                         head in arb_present()) {
             let spec = present_ribbon_spec(head) + ribbon(&tail);
-            let mut ps = tail;
-            ps.push(head);
-            prop_assert_eq!(ribbon(&ps), spec);
+            prop_assert_eq!(ribbon(&[vec![head], tail].concat()), spec);
         }
     }
 }
