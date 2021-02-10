@@ -26,7 +26,9 @@ use std::{
 use structopt::StructOpt;
 
 mod utils;
+mod backends_common;
 mod klee;
+mod seahorn;
 
 // Command line argument parsing
 #[derive(StructOpt)]
@@ -632,20 +634,10 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
     rs
 }
 
-fn seahorn_verify(
-    opt: &Opt,
-    name: &str,
-    entry: &str,
-    bcfile: &PathBuf,
-    features: &[&str],
-) -> Status {
-    todo!()
-}
-
 fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[&str]) -> Status {
     match opt.backend {
         Backend::Klee => klee::verify(&opt, &name, &entry, &bcfile, &features),
-        Backend::Seahorn => seahorn_verify(&opt, &name, &entry, &bcfile, &features),
+        Backend::Seahorn => seahorn::verify(&opt, &name, &entry, &bcfile, &features),
         Backend::Proptest => unreachable!(),
     }
 }

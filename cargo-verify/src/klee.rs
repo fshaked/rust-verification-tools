@@ -19,7 +19,7 @@ use std::{
     str::from_utf8,
 };
 
-use super::{utils, Opt, Status};
+use super::{backends_common, utils, Opt, Status};
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[&str]) -> Status {
     let mut kleedir = opt.crate_path.clone();
@@ -117,7 +117,7 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[
 fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     if line.starts_with("VERIFIER_EXPECT:") {
         4
-    } else if is_expected_panic(&line, &expect, &name) {
+    } else if backends_common::is_expected_panic(&line, &expect, &name) {
         // low priority because we report it directly
         5
     } else if line.contains("assertion failed") {
@@ -188,10 +188,9 @@ fn run(
         None => vec![],
     };
 
-    let args = [args, opt_args].concat();
-
     let mut cmd = Command::new("klee");
     cmd.args(&args)
+        .args(&opt_args)
         .arg(bcfile.to_str().unwrap())
         .args(&opt.args)
         .current_dir(&opt.crate_path);
@@ -200,13 +199,15 @@ fn run(
 
     let output = cmd.output().expect("Failed to execute `klee`");
 
-    if !output.status.success() {
-        error!("`klee` terminated unsuccessfully");
-        exit(1);
-    }
-
     let stdout = utils::from_latin1(&output.stdout);
     let stderr = utils::from_latin1(&output.stderr);
+
+    // if !output.status.success() {
+    //     utils::info_lines("STDOUT: ", stdout.lines());
+    //     utils::info_lines("STDERR: ", stderr.lines());
+    //     error!("`klee` terminated unsuccessfully");
+    //     exit(1);
+    // }
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -249,7 +250,7 @@ fn run(
             } else if l.starts_with("VERIFIER_EXPECT:") {
                 // don't confuse this line with an error!
                 None
-            } else if is_expected_panic(&l, &expect, &name) {
+            } else if backends_common::is_expected_panic(&l, &expect, &name) {
                 Some(Status::Verified)
             } else if l.contains("assertion failed") {
                 Some(Status::Error)
@@ -260,10 +261,9 @@ fn run(
             } else if l.contains("note: run with `RUST_BACKTRACE=1`") {
                 Some(Status::Error)
             } else if l.contains("KLEE: done:") {
-                if expect == None {
-                    Some(Status::Verified)
-                } else {
-                    Some(Status::Error)
+                match expect {
+                    None => Some(Status::Verified),
+                    _    => Some(Status::Error),
                 }
             } else {
                 None
@@ -343,28 +343,4 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &PathBuf, features: &[&str]) {
         error!("FAILED: Couldn't run llvm-nm");
         exit(1)
     }
-}
-
-// Detect lines that match #[should_panic(expected = ...)] string
-fn is_expected_panic(line: &str, expect: &Option<&str>, name: &str) -> bool {
-    lazy_static! {
-        static ref PANOCKED: Regex = Regex::new(r" panicked at '([^']*)',\s+(.*)").unwrap();
-    }
-
-    if let Some(expect) = expect {
-        if let Some(caps) = PANOCKED.captures(line) {
-            let message = caps.get(1).unwrap().as_str();
-            let srcloc = caps.get(2).unwrap().as_str();
-            if message.contains(expect) {
-                info!(
-                    "     {}: Detected expected failure '{}' at {}",
-                    name, message, srcloc
-                );
-                info!("     Error message: {}", line);
-                return true;
-            }
-        }
-    }
-
-    false
 }

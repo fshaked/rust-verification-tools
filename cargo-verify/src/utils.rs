@@ -7,8 +7,8 @@
 // except according to those terms.
 
 ////////////////////////////////////////////////////////////////////////////////
-// Put here general purpose utility functions (nothing that is part of core
-// functionality).
+// Put here reusable general purpose utility functions (nothing that is part of
+// core functionality).
 ////////////////////////////////////////////////////////////////////////////////
 
 use log::info;
