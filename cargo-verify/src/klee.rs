@@ -162,30 +162,28 @@ fn run(
     bcfile: &PathBuf,
     kleedir: &PathBuf,
 ) -> (Status, HashMap<String, isize>) {
-    let args = vec![
-        "--exit-on-error",
-        "--entry-point",
-        entry,
-        // "--posix-runtime",
-        // "--libcxx",
-        "--libc=klee",
-        "--silent-klee-assume",
-        "--output-dir",
-        kleedir.to_str().unwrap(),
-        "--disable-verify", // workaround https://github.com/klee/klee/issues/937
-    ];
-
-    let opt_args = match &opt.backend_flags {
-        // FIXME: I'm assuming multiple flags are comma separated?
-        // Make sure this is also the case when using the cli arg multiple times.
-        Some(opt_flags) => opt_flags.split(',').collect::<Vec<&str>>(),
-        None => vec![],
-    };
-
     let mut cmd = Command::new("klee");
-    cmd.args(&args)
-        .args(&opt_args)
-        .arg(bcfile.to_str().unwrap())
+    cmd.args(&["--exit-on-error",
+               "--entry-point",
+               entry,
+               // "--posix-runtime",
+               // "--libcxx",
+               "--libc=klee",
+               "--silent-klee-assume",
+               "--output-dir",
+               kleedir.to_str().unwrap(),
+               "--disable-verify", // workaround https://github.com/klee/klee/issues/937
+    ]);
+
+    match &opt.backend_flags {
+        // FIXME: I'm assuming multiple flags are comma separated?
+        Some(opt_flags) => {
+            cmd.args(opt_flags.split(',').collect::<Vec<&str>>());
+        }
+        None => (),
+    }
+
+    cmd.arg(bcfile.to_str().unwrap())
         .args(&opt.args)
         .current_dir(&opt.crate_path);
 
@@ -305,12 +303,21 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &PathBuf, features: &[&str]) {
     cmd.current_dir(&opt.crate_path);
 
     if opt.tests || !opt.test.is_empty() {
-        cmd.arg("test")
-            .args(features)
-            .arg(&name)
+        cmd.arg("test");
+
+        if ! features.is_empty() {
+            cmd.arg("--features").arg(features.join(","));
+        }
+
+        cmd.arg(&name)
             .args(["--", "--nocapture"].iter());
     } else {
-        cmd.arg("run").args(features);
+        cmd.arg("run");
+
+        if ! features.is_empty() {
+            cmd.arg("--features").arg(features.join(","));
+        }
+
         if !opt.args.is_empty() {
             cmd.arg("--").args(opt.args.iter());
         }

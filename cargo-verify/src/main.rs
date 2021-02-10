@@ -21,9 +21,9 @@ use std::{
     fmt,
     iter::{self, FromIterator},
     process::exit,
-    str::{from_utf8, FromStr},
+    str::from_utf8,
 };
-use structopt::StructOpt;
+use structopt::{StructOpt, clap::arg_enum};
 
 mod backends_common;
 mod klee;
@@ -38,12 +38,16 @@ mod utils;
     // version number is taken automatically from Cargo.toml
 )]
 pub struct Opt {
+    // TODO: make this more like 'cargo test --manifest-path <PATH>'
+    // i.e., path to Cargo.toml
     /// Filesystem path to local crate to verify
-    #[structopt(name = "PATH", parse(from_os_str))]
+    #[structopt(long = "path", name = "PATH", parse(from_os_str),
+                default_value = ".",
+    )]
     crate_path: PathBuf,
 
     /// Arguments to pass to program under test
-    #[structopt(name = "ARG")]
+    #[structopt(name = "ARG", last = true)]
     args: Vec<String>,
 
     /// Select verification backend
@@ -51,7 +55,8 @@ pub struct Opt {
         short,
         long,
         name = "BACKEND",
-        default_value = "klee", // FIXME: is that a sensible choice?
+        possible_values = &Backend::variants(),
+        default_value = "Klee", // FIXME: is that a sensible choice?
     )]
     backend: Backend,
 
@@ -67,8 +72,9 @@ pub struct Opt {
     #[structopt(short, long)]
     tests: bool,
 
+    // TODO: make this more like 'cargo test [TESTNAME]'
     /// Only verify tests containing this string in their names
-    #[structopt(long, name = "TESTNAME")]
+    #[structopt(long, number_of_values = 1, name = "TESTNAME")]
     test: Vec<String>,
 
     /// Number of parallel jobs, defaults to # of CPUs
@@ -84,23 +90,12 @@ pub struct Opt {
     verbosity: usize,
 }
 
-#[derive(Debug, PartialEq)]
-enum Backend {
-    Proptest,
-    Klee,
-    Seahorn,
-}
-
-impl FromStr for Backend {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "proptest" => Ok(Backend::Proptest),
-            "klee" => Ok(Backend::Klee),
-            "seahorn" => Ok(Backend::Seahorn),
-            _ => Err(String::from("unrecognised backend")),
-        }
+arg_enum!{
+    #[derive(Debug, PartialEq)]
+    enum Backend {
+        Proptest,
+        Klee,
+        Seahorn,
     }
 }
 
@@ -126,7 +121,7 @@ fn main() {
     if opt.backend == Backend::Proptest {
         if opt.replay > 0 && !opt.args.is_empty() {
             error!(
-                "The proptest backend does not support '--replay' and passing arguments together."
+                "The Proptest backend does not support '--replay' and passing arguments together."
             );
             exit(1);
         }
@@ -144,9 +139,9 @@ fn main() {
     }
 
     let features = match opt.backend {
-        Backend::Klee => vec!["--features", "verifier-klee"],
-        Backend::Proptest => vec!["--features", "verifier-seahorn"],
-        Backend::Seahorn => vec!["--features", "verifier-seahorn"],
+        Backend::Klee => vec!["verifier-klee"],
+        Backend::Proptest => vec!["verifier-seahorn"],
+        Backend::Seahorn => vec!["verifier-seahorn"],
     };
 
     if opt.clean {
@@ -232,41 +227,29 @@ fn get_meta_target_directory(crate_dir: &PathBuf) -> PathBuf {
 
 // Invoke proptest to compile and fuzz proptest targets
 fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
-    let mut flags: Vec<&str> = Vec::from(features);
-    if opt.verbosity > 0 {
-        flags.push("-v");
+    let mut cmd = Command::new("cargo");
+    cmd.arg("test")
+        .args(vec!["-v"; opt.verbosity])
+        .current_dir(&opt.crate_path);
+
+    if ! features.is_empty() {
+        cmd.arg("--features").arg(features.join(","));
     }
 
-    /* FIXME: `cmd` is never use?
-    if runtests or tests:
-      cmd = 'test'
-    else:
-      cmd = 'run'
-     */
-
     if opt.tests {
-        flags.push("--tests");
+        cmd.arg("--tests");
     }
 
     for t in &opt.test {
-        flags.push("--test");
-        flags.push(&t);
+        cmd.arg("--test").arg(t);
     }
 
     if opt.replay > 0 {
         assert!(opt.args.is_empty());
-        flags.push("--");
-        flags.push("--nocapture");
+        cmd.arg("--").arg("--nocapture");
     } else if !opt.args.is_empty() {
-        flags.push("--");
-        flags.extend_from_slice(
-            // Convert opt.args from Vec<String> to Vec<&str>.
-            &opt.args.iter().map(AsRef::as_ref).collect::<Vec<&str>>(),
-        );
+        cmd.arg("--").args(&opt.args);
     }
-
-    let mut cmd = Command::new("cargo");
-    cmd.arg("test").args(flags).current_dir(&opt.crate_path);
 
     utils::info_cmd(&cmd, "Proptest");
 
@@ -291,20 +274,25 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
 }
 
 fn get_default_host(crate_path: &PathBuf) -> String {
-    let output = Command::new("rustup")
-        .arg("show")
-        .current_dir(crate_path)
-        .output()
-        .expect("Failed to execute `rustup show`");
+    let mut cmd = Command::new("rustup");
+    cmd.arg("show")
+        .current_dir(crate_path);
+
+    utils::info_cmd(&cmd, "rustup");
+
+    let output = cmd.output().expect("Failed to execute `rustup`");
+
+    let stdout = from_utf8(&output.stdout).unwrap();
+    let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
+        utils::info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
         error!("`rustup show` terminated unsuccessfully");
         exit(1);
     }
 
-    from_utf8(&output.stdout)
-        .unwrap()
-        .lines()
+    stdout.lines()
         .find_map(|l| l.strip_prefix("Default host:").and_then(|l| Some(l.trim())))
         .expect("Unable to determine default host")
         .to_string()
@@ -355,28 +343,24 @@ fn compile(
     // (This may not be inside the crate if using workspaces)
     let target_dir = get_meta_target_directory(&opt.crate_path);
 
-    let mut flags = vec![];
 
-    flags.extend_from_slice(features);
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build");
 
-    if opt.verbosity > 0 {
-        flags.push("-v");
+    if ! features.is_empty() {
+        cmd.arg("--features").arg(features.join(","));
     }
 
     if opt.tests || !opt.test.is_empty() {
-        flags.push("--tests");
+        cmd.arg("--tests");
     }
 
     // The following line is not present because we care about the target It is
     // there to allow us to use -Clto to build crates whose dependencies invoke
     // proc_macros.
     // FIXME: "=="?
-    let target_flag = format!("--target=={}", target);
-    flags.push(&target_flag);
-
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .args(&flags)
+    cmd.arg(format!("--target=={}", target))
+        .args(vec!["-v"; opt.verbosity])
         .current_dir(&opt.crate_path)
         .env("RUSTFLAGS", &rustflags)
         // .env("PATH", ...)
@@ -532,9 +516,13 @@ fn list_tests(crate_path: &PathBuf, features: &[&str]) -> Vec<String> {
     };
 
     let mut cmd = Command::new("cargo");
-    cmd.arg("test")
-        .args(features)
-        .args(["--", "--list"].iter())
+    cmd.arg("test");
+
+    if ! features.is_empty() {
+        cmd.arg("--features").arg(features.join(","));
+    }
+
+    cmd.args(&["--", "--list"])
         // .arg("--exclude-should-panic")
         .current_dir(&crate_path)
         .env("RUSTFLAGS", rustflags);

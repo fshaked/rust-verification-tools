@@ -67,48 +67,48 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
 }
 
 fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -> Status {
-    let args = vec![
-        "bpf",
-        // The following was extracted from `sea yama -y VCC/seahorn/sea_base.yaml`
-        "-O3",
-        "--inline",
-        "--enable-loop-idiom",
-        "--enable-indvar",
-        "--no-lower-gv-init-struct",
-        "--externalize-addr-taken-functions",
-        "--no-kill-vaarg",
-        "--with-arith-overflow=true",
-        "--horn-unify-assumes=true",
-        "--horn-gsa",
-        "--no-fat-fns=bcmp,memcpy,assert_bytes_match,ensure_linked_list_is_allocated,sea_aws_linked_list_is_valid",
-        "--dsa=sea-cs-t",
-        "--devirt-functions=types",
-        "--bmc=opsem",
-        "--horn-vcgen-use-ite",
-        "--horn-vcgen-only-dataflow=true",
-        "--horn-bmc-coi=true",
-        "--sea-opsem-allocator=static",
-        "--horn-explicit-sp0=false",
-        "--horn-bv2-lambdas",
-        "--horn-bv2-simplify=true",
-        "--horn-bv2-extra-widemem",
-        "--horn-stats=true",
-        "--keep-temps",
-    ];
+    let mut cmd = Command::new("sea");
+    cmd.args(&["bpf",
+               // The following was extracted from `sea yama -y VCC/seahorn/sea_base.yaml`
+               "-O3",
+               "--inline",
+               "--enable-loop-idiom",
+               "--enable-indvar",
+               "--no-lower-gv-init-struct",
+               "--externalize-addr-taken-functions",
+               "--no-kill-vaarg",
+               "--with-arith-overflow=true",
+               "--horn-unify-assumes=true",
+               "--horn-gsa",
+               "--no-fat-fns=bcmp,memcpy,assert_bytes_match,ensure_linked_list_is_allocated,sea_aws_linked_list_is_valid",
+               "--dsa=sea-cs-t",
+               "--devirt-functions=types",
+               "--bmc=opsem",
+               "--horn-vcgen-use-ite",
+               "--horn-vcgen-only-dataflow=true",
+               "--horn-bmc-coi=true",
+               "--sea-opsem-allocator=static",
+               "--horn-explicit-sp0=false",
+               "--horn-bv2-lambdas",
+               "--horn-bv2-simplify=true",
+               "--horn-bv2-extra-widemem",
+               "--horn-stats=true",
+               "--keep-temps",
+    ]);
 
-    let opt_args = match &opt.backend_flags {
+    cmd.arg(String::from("--temp-dir=") + outdir.to_str().unwrap())
+        .arg(String::from("--entry=") + entry);
+
+    match &opt.backend_flags {
         // FIXME: I'm assuming multiple flags are comma separated?
         // Make sure this is also the case when using the cli arg multiple times.
-        Some(opt_flags) => opt_flags.split(',').collect::<Vec<&str>>(),
-        None => vec![],
+        Some(flags) => {
+            cmd.args(flags.split(',').collect::<Vec<&str>>());
+        }
+        None => (),
     };
 
-    let mut cmd = Command::new("sea");
-    cmd.args(&args)
-        .arg(String::from("--temp-dir=") + outdir.to_str().unwrap())
-        .arg(String::from("--entry=") + entry)
-        .args(&opt_args)
-        .arg(bcfile.to_str().unwrap())
+    cmd.arg(bcfile.to_str().unwrap())
         // .args(&opt.args)
         .current_dir(&opt.crate_path);
 
