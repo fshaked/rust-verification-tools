@@ -12,18 +12,19 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 use log::info;
-use std::process::Command;
 use std::str::Lines;
+use std::{path::Path, process::Command};
 
 pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
         "Running {} on '{}' with command `{} {}`",
         name,
-        cmd.get_current_dir().unwrap().to_str().unwrap(),
-        cmd.get_program().to_str().unwrap(),
+        cmd.get_current_dir().and_then(Path::to_str).unwrap_or("."),
+        cmd.get_program().to_str().unwrap_or("???"),
         cmd.get_args()
             .map(|s| s.to_str().unwrap())
-            .collect::<String>()
+            .collect::<Vec<_>>()
+            .join(" ")
     );
 }
 

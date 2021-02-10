@@ -9,10 +9,7 @@
 use log::{error, info};
 use std::path::PathBuf;
 use std::process::Command;
-use std::{
-    fs::remove_dir_all,
-    str::from_utf8,
-};
+use std::{fs::remove_dir_all, str::from_utf8};
 
 use super::{backends_common, utils, Opt, Status};
 
@@ -54,13 +51,11 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
         4
     } else if line == "sat" {
         1
-    } else if line.starts_with("Warning: Externalizing function:") ||
-        line.starts_with("Warning: not lowering an initializer for a global struct:")
+    } else if line.starts_with("Warning: Externalizing function:")
+        || line.starts_with("Warning: not lowering an initializer for a global struct:")
     {
         4
-    } else if backends_common::is_expected_panic(&line, &expect, &name) ||
-        line == "unsat"
-    {
+    } else if backends_common::is_expected_panic(&line, &expect, &name) || line == "unsat" {
         5
     } else if line.starts_with("Warning:") {
         // Really high priority to force me to categorize it
@@ -71,13 +66,7 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     }
 }
 
-fn run(
-    opt: &Opt,
-    name: &str,
-    entry: &str,
-    bcfile: &PathBuf,
-    outdir: &PathBuf,
-) -> Status {
+fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -> Status {
     let args = vec![
         "bpf",
         // The following was extracted from `sea yama -y VCC/seahorn/sea_base.yaml`
@@ -160,6 +149,7 @@ fn run(
     // Scan for first message that indicates result
     let status = stderr
         .lines()
+        .chain(stdout.lines())
         .find_map(|l| {
             if l.starts_with("VERIFIER_EXPECT:") {
                 // don't confuse this line with an error!
@@ -171,7 +161,7 @@ fn run(
             } else if l == "unsat" {
                 match expect {
                     None => Some(Status::Verified),
-                    _    => Some(Status::Error),
+                    _ => Some(Status::Error),
                 }
             } else {
                 None

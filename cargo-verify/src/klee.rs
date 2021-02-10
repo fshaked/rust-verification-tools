@@ -11,13 +11,7 @@ use log::{error, info, log};
 use regex::Regex;
 use std::path::PathBuf;
 use std::process::Command;
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    fs::remove_dir_all,
-    process::exit,
-    str::from_utf8,
-};
+use std::{collections::HashMap, ffi::OsString, fs::remove_dir_all, process::exit, str::from_utf8};
 
 use super::{backends_common, utils, Opt, Status};
 
@@ -263,7 +257,7 @@ fn run(
             } else if l.contains("KLEE: done:") {
                 match expect {
                     None => Some(Status::Verified),
-                    _    => Some(Status::Error),
+                    _ => Some(Status::Error),
                 }
             } else {
                 None

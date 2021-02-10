@@ -25,10 +25,10 @@ use std::{
 };
 use structopt::StructOpt;
 
-mod utils;
 mod backends_common;
 mod klee;
 mod seahorn;
+mod utils;
 
 // Command line argument parsing
 #[derive(StructOpt)]
@@ -146,7 +146,7 @@ fn main() {
     let features = match opt.backend {
         Backend::Klee => vec!["--features", "verifier-klee"],
         Backend::Proptest => vec!["--features", "verifier-seahorn"],
-        Backend::Seahorn => vec![],
+        Backend::Seahorn => vec!["--features", "verifier-seahorn"],
     };
 
     if opt.clean {
@@ -229,7 +229,6 @@ fn get_meta_target_directory(crate_dir: &PathBuf) -> PathBuf {
         .unwrap()
         .target_directory
 }
-
 
 // Invoke proptest to compile and fuzz proptest targets
 fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
@@ -317,11 +316,10 @@ fn compile(
     features: &[&str],
     target: &str,
 ) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
-    let rustflags = vec![
+    let mut rustflags = vec![
         "-Clto", // Generate linked bitcode for entire crate
         "-Cembed-bitcode=yes",
         "--emit=llvm-bc",
-        "-Copt-level=1", // Avoid generating SSE instructions
         // Any value except 0 seems to work
         "--cfg=verify", // Select verification versions of libraries
         // "-Ccodegen-units=1",     // Optimize a bit more?
@@ -338,6 +336,11 @@ fn compile(
         "-Clink-arg=-fuse-ld=lld",
     ]
     .join(" ");
+
+    if opt.backend != Backend::Seahorn {
+        // Avoid generating SSE instructions
+        rustflags.push_str(" -Copt-level=1");
+    }
 
     let rustflags = match std::env::var_os("RUSTFLAGS") {
         Some(mut env_rustflags) => {
@@ -360,7 +363,7 @@ fn compile(
         flags.push("-v");
     }
 
-    if opt.tests {
+    if opt.tests || !opt.test.is_empty() {
         flags.push("--tests");
     }
 
@@ -373,7 +376,7 @@ fn compile(
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
-        .args(flags)
+        .args(&flags)
         .current_dir(&opt.crate_path)
         .env("RUSTFLAGS", &rustflags)
         // .env("PATH", ...)
@@ -445,7 +448,7 @@ fn count_symbols(bcfile: &PathBuf, fs: &[&str]) -> usize {
 
     utils::info_cmd(&cmd, "llvm-nm");
 
-    let output = cmd.output().expect("Failed to execute `cargo`");
+    let output = cmd.output().expect("Failed to execute `llvm-nm`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     // let stderr = from_utf8(&output.stderr).unwrap();
@@ -537,8 +540,8 @@ fn list_tests(crate_path: &PathBuf, features: &[&str]) -> Vec<String> {
         .env("RUSTFLAGS", rustflags);
     // .env("PATH", ...)
 
-    utils::info_cmd(&cmd, "rvt-patch-llvm");
-    let output = cmd.output().expect("Failed to execute `rvt-patch-llvm`");
+    utils::info_cmd(&cmd, "cargo");
+    let output = cmd.output().expect("Failed to execute `cargo`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
@@ -602,16 +605,19 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
                 && l[1].to_lowercase() == "t"
                 && (l[2].starts_with("__ZN") || l[2].starts_with("_ZN"))
             {
-                let mangled = l[2];
-                let (_prefix, suffix) = if l[2].starts_with("__ZN") {
+                let mangled = if l[2].starts_with("__ZN") {
                     // on OSX, llvm-nm shows a double underscore prefix
-                    (&mangled[1..4], &mangled[4..])
+                    &l[2][1..]
                 } else {
-                    (&mangled[0..3], &mangled[3..])
+                    &l[2]
                 };
-                let dname = format!("{:#}", demangle(suffix));
+                let dname = format!("{:#}", demangle(mangled))
+                    .split("::")
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("::");
                 if names.contains(dname.as_str()) {
-                    Some((dname, String::from("_ZN") + suffix))
+                    Some((dname, mangled.into()))
                 } else {
                     None
                 }
@@ -719,6 +725,7 @@ fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> Status {
                 error!("No tests found");
                 return Status::Unknown;
             }
+            // let tests: Vec<String> = tests.iter().map(|t| format!("{}::{}", package, t)).collect();
 
             info!("  Checking {:?}", tests);
 
