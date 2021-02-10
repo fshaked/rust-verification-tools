@@ -1,3 +1,11 @@
+// Copyright 2020-2021 The Propverify authors
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 use lazy_static::lazy_static;
 use log::{error, info, log};
 use regex::Regex;
@@ -11,7 +19,7 @@ use std::{
     str::from_utf8,
 };
 
-use crate::{Opt, Status};
+use super::{utils, Opt, Status};
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[&str]) -> Status {
     let mut kleedir = opt.crate_path.clone();
@@ -188,7 +196,7 @@ fn run(
         .args(&opt.args)
         .current_dir(&opt.crate_path);
 
-    crate::info_cmd(&cmd, "KLEE");
+    utils::info_cmd(&cmd, "KLEE");
 
     let output = cmd.output().expect("Failed to execute `klee`");
 
@@ -197,8 +205,8 @@ fn run(
         exit(1);
     }
 
-    let stdout = crate::from_latin1(&output.stdout);
-    let stderr = crate::from_latin1(&output.stderr);
+    let stdout = utils::from_latin1(&output.stdout);
+    let stderr = utils::from_latin1(&output.stderr);
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -286,7 +294,7 @@ fn run(
         })
         .collect();
 
-    crate::info_lines("STDOUT: ", stdout.lines());
+    utils::info_lines("STDOUT: ", stdout.lines());
 
     for l in stderr.lines() {
         if importance(&l, &expect, &name) < opt.verbosity as i8 {
@@ -323,15 +331,15 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &PathBuf, features: &[&str]) {
     };
     cmd.env("RUSTFLAGS", rustflags).env("KTEST_FILE", ktest);
 
-    crate::info_cmd(&cmd, "Replay");
+    utils::info_cmd(&cmd, "Replay");
     let output = cmd.output().expect("Failed to execute `cargo`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        crate::info_lines("STDOUT: ", stdout.lines());
-        crate::info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("FAILED: Couldn't run llvm-nm");
         exit(1)
     }

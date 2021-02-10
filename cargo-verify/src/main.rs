@@ -21,10 +21,11 @@ use std::{
     fmt,
     iter::{self, FromIterator},
     process::exit,
-    str::{from_utf8, FromStr, Lines},
+    str::{from_utf8, FromStr},
 };
 use structopt::StructOpt;
 
+mod utils;
 mod klee;
 
 // Command line argument parsing
@@ -227,23 +228,6 @@ fn get_meta_target_directory(crate_dir: &PathBuf) -> PathBuf {
         .target_directory
 }
 
-fn info_cmd(cmd: &Command, name: &str) {
-    info!(
-        "Running {} on '{}' with command `{} {}`",
-        name,
-        cmd.get_current_dir().unwrap().to_str().unwrap(),
-        cmd.get_program().to_str().unwrap(),
-        cmd.get_args()
-            .map(|s| s.to_str().unwrap())
-            .collect::<String>()
-    );
-}
-
-fn info_lines(prefix: &str, lines: Lines) {
-    for l in lines {
-        info!("{}{}", prefix, l);
-    }
-}
 
 // Invoke proptest to compile and fuzz proptest targets
 fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
@@ -283,7 +267,7 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
     let mut cmd = Command::new("cargo");
     cmd.arg("test").args(flags).current_dir(&opt.crate_path);
 
-    info_cmd(&cmd, "Proptest");
+    utils::info_cmd(&cmd, "Proptest");
 
     let output = cmd.output().expect("Failed to execute `cargo`");
 
@@ -291,8 +275,8 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        info_lines("STDERR: ", stderr.lines());
-        info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
 
         for l in stderr.lines() {
             if l.contains("with overflow") {
@@ -395,7 +379,7 @@ fn compile(
         .env("CFLAGS", "-flto=thin")
         .env("CC", "clang-10");
 
-    info_cmd(&cmd, "cargo");
+    utils::info_cmd(&cmd, "cargo");
     info!("RUSTFLAGS='{}'", rustflags.to_str().unwrap());
 
     let output = cmd.output().expect("Failed to execute `cargo`");
@@ -404,8 +388,8 @@ fn compile(
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        info_lines("STDOUT: ", stdout.lines());
-        info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("FAILED: Couldn't compile");
         return None;
     }
@@ -457,7 +441,7 @@ fn count_symbols(bcfile: &PathBuf, fs: &[&str]) -> usize {
     cmd.arg("--defined-only").arg(bcfile);
     // .current_dir(&opt.crate_path)
 
-    info_cmd(&cmd, "llvm-nm");
+    utils::info_cmd(&cmd, "llvm-nm");
 
     let output = cmd.output().expect("Failed to execute `cargo`");
 
@@ -485,15 +469,15 @@ fn link(crate_path: &PathBuf, out_file: &PathBuf, in_files: &[PathBuf]) -> bool 
         .args(in_files)
         .current_dir(&crate_path);
 
-    info_cmd(&cmd, "llvm-link");
+    utils::info_cmd(&cmd, "llvm-link");
     let output = cmd.output().expect("Failed to execute `llvm-link`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        info_lines("STDOUT: ", stdout.lines());
-        info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("FAILED: Couldn't link");
         false
     } else {
@@ -515,15 +499,15 @@ fn patch_llvm(options: &[&str], bcfile: &PathBuf, new_bcfile: &PathBuf) -> bool 
     cmd.arg(bcfile).arg("-o").arg(new_bcfile).args(options);
     // .current_dir(&crate_path)
 
-    info_cmd(&cmd, "rvt-patch-llvm");
+    utils::info_cmd(&cmd, "rvt-patch-llvm");
     let output = cmd.output().expect("Failed to execute `rvt-patch-llvm`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        info_lines("STDOUT: ", stdout.lines());
-        info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("FAILED: Couldn't run rvt-patch-llvm");
         false
     } else {
@@ -551,15 +535,15 @@ fn list_tests(crate_path: &PathBuf, features: &[&str]) -> Vec<String> {
         .env("RUSTFLAGS", rustflags);
     // .env("PATH", ...)
 
-    info_cmd(&cmd, "rvt-patch-llvm");
+    utils::info_cmd(&cmd, "rvt-patch-llvm");
     let output = cmd.output().expect("Failed to execute `rvt-patch-llvm`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if false && !output.status.success() {
-        info_lines("STDOUT: ", stdout.lines());
-        info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("Couldn't get list of tests");
         exit(1)
     }
@@ -595,15 +579,15 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
     cmd.arg("--defined-only").arg(bcfile);
     // .current_dir(&crate_path)
 
-    info_cmd(&cmd, "llvm-nm");
+    utils::info_cmd(&cmd, "llvm-nm");
     let output = cmd.output().expect("Failed to execute `llvm-nm`");
 
     let stdout = from_utf8(&output.stdout).unwrap();
     let stderr = from_utf8(&output.stderr).unwrap();
 
     if !output.status.success() {
-        info_lines("STDOUT: ", stdout.lines());
-        info_lines("STDERR: ", stderr.lines());
+        utils::info_lines("STDOUT: ", stdout.lines());
+        utils::info_lines("STDERR: ", stderr.lines());
         error!("FAILED: Couldn't run llvm-nm");
         exit(1)
     }
@@ -646,16 +630,6 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
     }
 
     rs
-}
-
-// encoding_rs (https://docs.rs/encoding_rs/), seems to be the standard crate
-// for encoding/decoding, has this to say about ISO-8859-1: "ISO-8859-1 does not
-// exist as a distinct encoding from windows-1252 in the Encoding
-// Standard. Therefore, an encoding that maps the unsigned byte value to the
-// same Unicode scalar value is not available via Encoding in this crate."
-// The following is from https://stackoverflow.com/a/28175593
-fn from_latin1(s: &[u8]) -> String {
-    s.iter().map(|&c| c as char).collect()
 }
 
 fn seahorn_verify(
