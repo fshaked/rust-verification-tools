@@ -7,7 +7,7 @@
 // except according to those terms.
 
 use lazy_static::lazy_static;
-use log::{info, log, warn};
+use log::{info, warn};
 use regex::Regex;
 use std::path::Path;
 use std::process::Command;
@@ -16,6 +16,15 @@ use std::{collections::HashMap, ffi::OsString, fs::remove_dir_all, str::from_utf
 use crate::utils::Append;
 
 use super::{backends_common, utils, CVResult, Opt, Status};
+
+pub fn check_install() -> bool {
+    let output = Command::new("which").arg("klee").output().ok();
+
+    match output {
+        Some(output) => output.status.success(),
+        None => false,
+    }
+}
 
 pub fn verify(
     opt: &Opt,
@@ -44,7 +53,7 @@ pub fn verify(
     let (status, stats) = run(&opt, &name, &entry, &bcfile, &out_dir)?;
     if !stats.is_empty() {
         match stats.get("completed paths") {
-            Some(n) => log!(log::Level::Warn, "     {}: {} paths", name, n),
+            Some(n) => info!("     {}: {} paths", name, n),
             None => (),
         }
         info!("     {}: {:?}", name, stats);

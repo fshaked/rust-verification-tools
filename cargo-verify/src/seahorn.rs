@@ -7,11 +7,25 @@
 // except according to those terms.
 
 use log::{info, warn};
-use std::{ffi::OsString, path::Path};
 use std::process::Command;
+use std::{ffi::OsString, path::Path};
 use std::{fs::remove_dir_all, str::from_utf8};
 
-use super::{backends_common, utils::{self, Append}, Opt, Status, CVResult};
+use super::{
+    backends_common,
+    utils::{self, Append},
+    CVResult, Opt, Status,
+};
+
+pub fn check_install() -> bool {
+    // TODO: maybe it's better to check `seahorn --version`?
+    let output = Command::new("which").arg("sea").output().ok();
+
+    match output {
+        Some(output) => output.status.success(),
+        None => false,
+    }
+}
 
 pub fn verify(
     opt: &Opt,
