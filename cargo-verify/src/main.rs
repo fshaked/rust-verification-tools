@@ -26,6 +26,7 @@ use std::{
     str::from_utf8,
 };
 use structopt::{clap::arg_enum, StructOpt};
+use rayon::prelude::*;
 
 mod backends_common;
 mod klee;
@@ -79,7 +80,7 @@ pub struct Opt {
 
     /// Number of parallel jobs, defaults to # of CPUs
     #[structopt(short, long, name = "N")]
-    job: Option<Option<usize>>,
+    jobs: Option<usize>,
 
     /// Replay to display concrete input values
     #[structopt(short, long, parse(from_occurrences))]
@@ -178,7 +179,13 @@ fn main() -> CVResult<()> {
         _ => {
             let target = get_default_host(&opt.crate_path)?;
             info!("target: {}", target);
-            verify(&opt, &package, &features, &target)?
+            match verify(&opt, &package, &features, &target) {
+                Ok(status) => status,
+                Err(err) => {
+                    error!("ERROR: {}", err);
+                    exit(1)
+                }
+            }
         }
     };
 
@@ -613,12 +620,29 @@ fn mangle_functions<T: AsRef<str>>(bcfile: &Path, names: &[T]) -> CVResult<Vec<(
     Ok(rs)
 }
 
-fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, features: &[&str]) -> CVResult<Status> {
-    match opt.backend {
+fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, features: &[&str]) -> Status {
+    let result = match opt.backend {
         Backend::Klee => klee::verify(&opt, &name, &entry, &bcfile, &features),
         Backend::Seahorn => seahorn::verify(&opt, &name, &entry, &bcfile, &features),
         Backend::Proptest => unreachable!(),
+    };
+
+    let status = match result {
+        Ok(status) => status,
+        Err(error) => {
+            error!("{}", error);
+            error!("Failed to run test '{}'.", name);
+            Status::Unknown
+        }
+    };
+
+    if status == Status::Verified {
+        println!("test {} ... ok", name);
+    } else {
+        println!("test {} ... {:?}", name, status);
     }
+
+    status
 }
 
 fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> CVResult<Status> {
@@ -710,35 +734,35 @@ fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> CVResult
     // output to generate an appropriate status string.
     info!("Running {} test(s)", tests.len());
 
-    let mut passes = 0;
-    let mut fails = 0;
-    let mut failure = None;
 
-    // TODO: use thread-pool to run the tests.
-    for (name, entry) in tests {
-        let status = match verifier_run(&opt, &name, &entry, &bcfile, &features) {
-            Ok(status) => status,
-            Err(error) => {
-                error!("{}", error);
-                error!("Failed to run test '{}'.", name);
-                Status::Unknown
-            }
-        };
+    let num_jobs = match opt.jobs {
+        Some(n) => n,
+        None => num_cpus::get(),
+    };
 
-        if status == Status::Verified {
-            println!("test {} ... ok", name);
-            passes += 1;
-        } else {
-            println!("test {} ... {:?}", name, status);
-            fails += 1;
-            failure = Some(status);
-        }
-    }
+    let results: Vec<Status> = if num_jobs > 1 {
+        // `build_global` must not be called more than once!
+        // This call configures the thread-pool for `par_iter` below.
+        rayon::ThreadPoolBuilder::new().num_threads(num_jobs).build_global()?;
+
+        tests.par_iter().map(|(name, entry)| {
+            verifier_run(&opt, &name, &entry, &bcfile, &features)
+        }).collect()
+    } else {
+        // same as above but without the overhead of rayon
+        tests.iter().map(|(name, entry)| {
+            verifier_run(&opt, &name, &entry, &bcfile, &features)
+        }).collect()
+    };
+
+    let passes = results.iter().filter(|r| **r == Status::Verified).count();
+    let fails = results.len() - passes;
+    // randomly pick one failing status
+    let failure = results.iter().find(|r| **r != Status::Verified);
 
     let (msg, status) = match failure {
         Some(failure) => {
-            // randomly pick one failing message
-            (failure.to_string(), failure)
+            (failure.to_string(), *failure)
         }
         None => ("ok".to_string(), Status::Verified),
     };
