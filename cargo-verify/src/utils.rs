@@ -12,7 +12,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 use log::info;
-use std::str::Lines;
+use std::{
+    borrow::{Borrow, ToOwned},
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+    str::Lines,
+};
 use std::{path::Path, process::Command};
 
 pub fn info_cmd(cmd: &Command, name: &str) {
@@ -42,4 +47,45 @@ pub fn info_lines(prefix: &str, lines: Lines) {
 // The following is from https://stackoverflow.com/a/28175593
 pub fn from_latin1(s: &[u8]) -> String {
     s.iter().map(|&c| c as char).collect()
+}
+
+pub trait Append<Segment: ?Sized>: Sized
+where
+    Segment: ToOwned<Owned = Self>,
+    Self: Borrow<Segment>,
+{
+    fn append(self: Self, s: impl AsRef<Segment>) -> Self;
+}
+
+impl Append<str> for String {
+    fn append(mut self: String, s: impl AsRef<str>) -> String {
+        self.push_str(s.as_ref());
+        self
+    }
+}
+
+impl Append<OsStr> for OsString {
+    fn append(mut self: OsString, s: impl AsRef<OsStr>) -> OsString {
+        self.push(s);
+        self
+    }
+}
+
+impl Append<Path> for PathBuf {
+    fn append(mut self: PathBuf, s: impl AsRef<Path>) -> PathBuf {
+        self.push(s);
+        self
+    }
+}
+
+pub fn add_pre_ext<T: AsRef<OsStr>>(file: &Path, ext: T) -> PathBuf {
+    assert!(file.is_file());
+
+    let new_ext = match file.extension() {
+        None => OsString::from(ext.as_ref()),
+        Some(old_ext) => OsString::from(ext.as_ref()).append(".").append(old_ext),
+    };
+    let mut new_file = PathBuf::from(&file);
+    new_file.set_extension(&new_ext);
+    new_file
 }

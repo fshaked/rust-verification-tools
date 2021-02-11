@@ -6,35 +6,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use log::{error, info};
-use std::path::PathBuf;
+use log::{info, warn};
+use std::{ffi::OsString, path::Path};
 use std::process::Command;
 use std::{fs::remove_dir_all, str::from_utf8};
 
-use super::{backends_common, utils, Opt, Status};
+use super::{backends_common, utils::{self, Append}, Opt, Status, CVResult};
 
-pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, _features: &[&str]) -> Status {
-    let mut outdir = opt.crate_path.clone();
-    outdir.push(&format!("seaout-{}", name));
+pub fn verify(
+    opt: &Opt,
+    name: &str,
+    entry: &str,
+    bcfile: &Path,
+    _features: &[&str],
+) -> CVResult<Status> {
+    let out_dir = opt.crate_path.clone().append(&format!("seaout-{}", name));
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
-    remove_dir_all(&outdir).unwrap_or_default();
+    remove_dir_all(&out_dir).unwrap_or_default();
 
-    if outdir.exists() {
-        error!(
-            "Directory or file '{}' already exists, and can't be removed",
-            outdir.to_str().unwrap()
-        );
-        return Status::Unknown;
+    if out_dir.exists() {
+        Err(format!(
+            "Directory or file '{:?}' already exists, and can't be removed",
+            out_dir
+        ))?
     }
 
     info!("     Running Seahorn to verify {}", name);
-    info!("      file: {}", bcfile.to_str().unwrap());
+    info!("      file: {:?}", bcfile);
     info!("      entry: {}", entry);
-    info!("      results: {}", outdir.to_str().unwrap());
+    info!("      results: {:?}", out_dir);
 
-    run(&opt, &name, &entry, &bcfile, &outdir)
+    run(&opt, &name, &entry, &bcfile, &out_dir)
 }
 
 // Return an int indicating importance of a line from KLEE's output
@@ -66,7 +70,7 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     }
 }
 
-fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -> Status {
+fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVResult<Status> {
     let mut cmd = Command::new("sea");
     cmd.args(&["bpf",
                // The following was extracted from `sea yama -y VCC/seahorn/sea_base.yaml`
@@ -96,7 +100,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -
                "--keep-temps",
     ]);
 
-    cmd.arg(String::from("--temp-dir=") + outdir.to_str().unwrap())
+    cmd.arg(OsString::from("--temp-dir=").append(out_dir))
         .arg(String::from("--entry=") + entry);
 
     match &opt.backend_flags {
@@ -108,23 +112,16 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -
         None => (),
     };
 
-    cmd.arg(bcfile.to_str().unwrap())
+    cmd.arg(&bcfile)
         // .args(&opt.args)
         .current_dir(&opt.crate_path);
 
     utils::info_cmd(&cmd, "Seahorn");
 
-    let output = cmd.output().expect("Failed to execute `sea`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
-
-    // if !output.status.success() {
-    //     utils::info_lines("STDOUT: ", stdout.lines());
-    //     utils::info_lines("STDERR: ", stderr.lines());
-    //     error!("`sea` terminated unsuccessfully");
-    //     exit(1);
-    // }
+    let stdout = from_utf8(&output.stdout)?;
+    let stderr = from_utf8(&output.stderr)?;
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -168,7 +165,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -
             }
         })
         .unwrap_or_else(|| {
-            info!("Unable to determine status of {}", name);
+            warn!("Unable to determine status of {}", name);
             Status::Unknown
         });
 
@@ -184,5 +181,5 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, outdir: &PathBuf) -
         }
     }
 
-    status
+    Ok(status)
 }

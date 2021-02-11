@@ -7,43 +7,46 @@
 // except according to those terms.
 
 use lazy_static::lazy_static;
-use log::{error, info, log};
+use log::{info, log, warn};
 use regex::Regex;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
-use std::{collections::HashMap, ffi::OsString, fs::remove_dir_all, process::exit, str::from_utf8};
+use std::{collections::HashMap, ffi::OsString, fs::remove_dir_all, str::from_utf8};
 
-use super::{backends_common, utils, Opt, Status};
+use crate::utils::Append;
 
-pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[&str]) -> Status {
-    let mut kleedir = opt.crate_path.clone();
-    kleedir.push(&format!("kleeout-{}", name));
+use super::{backends_common, utils, CVResult, Opt, Status};
+
+pub fn verify(
+    opt: &Opt,
+    name: &str,
+    entry: &str,
+    bcfile: &Path,
+    features: &[&str],
+) -> CVResult<Status> {
+    let out_dir = opt.crate_path.clone().append(&format!("kleeout-{}", name));
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
-    remove_dir_all(&kleedir).unwrap_or_default();
-
-    if kleedir.exists() {
-        error!(
-            "Directory or file '{}' already exists, and can't be removed",
-            kleedir.to_str().unwrap()
-        );
-        return Status::Unknown;
+    remove_dir_all(&out_dir).unwrap_or_default();
+    if out_dir.exists() {
+        Err(format!(
+            "Directory or file '{:?}' already exists, and can't be removed",
+            out_dir
+        ))?
     }
 
     info!("     Running KLEE to verify {}", name);
-    info!("      file: {}", bcfile.to_str().unwrap());
+    info!("      file: {:?}", bcfile);
     info!("      entry: {}", entry);
-    info!("      results: {}", kleedir.to_str().unwrap());
+    info!("      results: {:?}", out_dir);
 
-    let (status, stats) = run(&opt, &name, &entry, &bcfile, &kleedir);
+    let (status, stats) = run(&opt, &name, &entry, &bcfile, &out_dir)?;
     if !stats.is_empty() {
-        log!(
-            log::Level::Warn,
-            "     {}: {} paths",
-            name,
-            stats.get("completed paths").unwrap()
-        );
+        match stats.get("completed paths") {
+            Some(n) => log!(log::Level::Warn, "     {}: {} paths", name, n),
+            None => (),
+        }
         info!("     {}: {:?}", name, stats);
     }
 
@@ -52,15 +55,13 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[
         static ref TEST_KTEST: Regex = Regex::new(r"test.*\.ktest$").unwrap();
     }
 
-    // {kleedir}/test*.err
-    let mut failures = kleedir
-        .read_dir()
-        .unwrap()
-        .map(|e| e.unwrap().path())
+    // {out_dir}/test*.err
+    let mut failures = out_dir
+        .read_dir()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
         .filter(|p| {
-            p.is_file() && TEST_ERR.is_match(p.file_name().unwrap().to_str().unwrap())
-            // p.file_name().unwrap().to_string_lossy().starts_with("test") &&
-            // p.extension() == Some(&OsString::from("err"))
+            p.is_file() && TEST_ERR.is_match(p.file_name().unwrap().to_str().expect("not UTF-8"))
         })
         .collect::<Vec<_>>();
     failures.sort_unstable();
@@ -69,15 +70,14 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[
     if opt.replay > 0 {
         // use -r -r to see all tests, not just failing tests
         let mut ktests = if opt.replay > 1 {
-            // {kleedir}/test*.ktest
-            kleedir
-                .read_dir()
-                .unwrap()
-                .map(|e| e.unwrap().path())
+            // {out_dir}/test*.ktest
+            out_dir
+                .read_dir()?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
                 .filter(|p| {
-                    p.is_file() && TEST_KTEST.is_match(p.file_name().unwrap().to_str().unwrap())
-                    // p.file_name().unwrap().to_string_lossy().starts_with("test") &&
-                    // p.extension() == Some(&OsString::from("ktest"))
+                    p.is_file()
+                        && TEST_KTEST.is_match(p.file_name().unwrap().to_str().expect("not UTF-8"))
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -85,18 +85,24 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[
             // '.ptr') with '.ktest'.
             failures
                 .iter()
-                .map(|p| p.with_extension("").with_extension("ktest"))
+                .map(|p| {
+                    p.with_extension("") // Remove '.err'
+                        .with_extension("ktest") // Replace '.*' with '.ktest'
+                })
                 .collect::<Vec<_>>()
         };
         ktests.sort_unstable();
 
         for ktest in ktests {
-            println!("    Test input {}", ktest.to_str().unwrap());
-            replay_klee(&opt, &name, &ktest, &features);
+            println!("    Test input {}", ktest.to_str().unwrap_or("???"));
+            match replay_klee(&opt, &name, &ktest, &features) {
+                Ok(()) => (),
+                Err(err) => warn!("Failed to replay: {}", err),
+            }
         }
     }
 
-    status
+    Ok(status)
 }
 
 // Return an int indicating importance of a line from KLEE's output
@@ -159,21 +165,22 @@ fn run(
     opt: &Opt,
     name: &str,
     entry: &str,
-    bcfile: &PathBuf,
-    kleedir: &PathBuf,
-) -> (Status, HashMap<String, isize>) {
+    bcfile: &Path,
+    out_dir: &Path,
+) -> CVResult<(Status, HashMap<String, isize>)> {
     let mut cmd = Command::new("klee");
-    cmd.args(&["--exit-on-error",
-               "--entry-point",
-               entry,
-               // "--posix-runtime",
-               // "--libcxx",
-               "--libc=klee",
-               "--silent-klee-assume",
-               "--output-dir",
-               kleedir.to_str().unwrap(),
-               "--disable-verify", // workaround https://github.com/klee/klee/issues/937
-    ]);
+    cmd.args(&[
+        "--exit-on-error",
+        "--entry-point",
+        entry,
+        // "--posix-runtime",
+        // "--libcxx",
+        "--libc=klee",
+        "--silent-klee-assume",
+        "--disable-verify", // workaround https://github.com/klee/klee/issues/937
+    ])
+    .arg("--output-dir")
+    .arg(out_dir);
 
     match &opt.backend_flags {
         // FIXME: I'm assuming multiple flags are comma separated?
@@ -183,23 +190,14 @@ fn run(
         None => (),
     }
 
-    cmd.arg(bcfile.to_str().unwrap())
-        .args(&opt.args)
-        .current_dir(&opt.crate_path);
+    cmd.arg(bcfile).args(&opt.args).current_dir(&opt.crate_path);
 
     utils::info_cmd(&cmd, "KLEE");
 
-    let output = cmd.output().expect("Failed to execute `klee`");
+    let output = cmd.output()?;
 
     let stdout = utils::from_latin1(&output.stdout);
     let stderr = utils::from_latin1(&output.stderr);
-
-    // if !output.status.success() {
-    //     utils::info_lines("STDOUT: ", stdout.lines());
-    //     utils::info_lines("STDERR: ", stderr.lines());
-    //     error!("`klee` terminated unsuccessfully");
-    //     exit(1);
-    // }
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -262,7 +260,7 @@ fn run(
             }
         })
         .unwrap_or_else(|| {
-            info!("Unable to determine status of {}", name);
+            warn!("Unable to determine status of {}", name);
             Status::Unknown
         });
 
@@ -277,11 +275,14 @@ fn run(
         .lines()
         // .filter(|l| l.starts_with("KLEE: done:"))
         .filter_map(|l| {
-            KLEE_DONE.captures(l).map(|caps| {
-                (
-                    caps.get(1).unwrap().as_str().trim().to_string(),
-                    caps.get(1).unwrap().as_str().parse::<isize>().unwrap(),
-                )
+            KLEE_DONE.captures(l).and_then(|caps| {
+                // If the value doesn't parse we throw the line.
+                caps.get(2)
+                    .unwrap()
+                    .as_str()
+                    .parse::<isize>()
+                    .ok()
+                    .map(|v| (caps.get(1).unwrap().as_str().trim().to_string(), v))
             })
         })
         .collect();
@@ -294,27 +295,26 @@ fn run(
         }
     }
 
-    (status, stats)
+    Ok((status, stats))
 }
 
 // Replay a KLEE "ktest" file
-fn replay_klee(opt: &Opt, name: &str, ktest: &PathBuf, features: &[&str]) {
+fn replay_klee(opt: &Opt, name: &str, ktest: &Path, features: &[&str]) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&opt.crate_path);
 
     if opt.tests || !opt.test.is_empty() {
         cmd.arg("test");
 
-        if ! features.is_empty() {
+        if !features.is_empty() {
             cmd.arg("--features").arg(features.join(","));
         }
 
-        cmd.arg(&name)
-            .args(["--", "--nocapture"].iter());
+        cmd.arg(&name).args(&["--", "--nocapture"]);
     } else {
         cmd.arg("run");
 
-        if ! features.is_empty() {
+        if !features.is_empty() {
             cmd.arg("--features").arg(features.join(","));
         }
 
@@ -324,24 +324,22 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &PathBuf, features: &[&str]) {
     }
 
     let rustflags = match std::env::var_os("RUSTFLAGS") {
-        Some(mut env_rustflags) => {
-            env_rustflags.push(" --cfg=verify");
-            env_rustflags
-        }
+        Some(env_rustflags) => env_rustflags.append(" --cfg=verify"),
         None => OsString::from("--cfg=verify"),
     };
     cmd.env("RUSTFLAGS", rustflags).env("KTEST_FILE", ktest);
 
     utils::info_cmd(&cmd, "Replay");
-    let output = cmd.output().expect("Failed to execute `cargo`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout)?;
+    let stderr = from_utf8(&output.stderr)?;
 
     if !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("FAILED: Couldn't run llvm-nm");
-        exit(1)
+        Err("FAILED: Couldn't replay")?
     }
+
+    Ok(())
 }

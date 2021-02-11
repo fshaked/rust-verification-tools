@@ -13,17 +13,19 @@ use lazy_static::lazy_static;
 use log::{error, info};
 use regex::Regex;
 use rustc_demangle::demangle;
-use std::path::PathBuf;
+use utils::{Append, add_pre_ext};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
     collections::HashSet,
+    error,
     ffi::{OsStr, OsString},
     fmt,
-    iter::{self, FromIterator},
+    iter,
     process::exit,
     str::from_utf8,
 };
-use structopt::{StructOpt, clap::arg_enum};
+use structopt::{clap::arg_enum, StructOpt};
 
 mod backends_common;
 mod klee;
@@ -41,9 +43,7 @@ pub struct Opt {
     // TODO: make this more like 'cargo test --manifest-path <PATH>'
     // i.e., path to Cargo.toml
     /// Filesystem path to local crate to verify
-    #[structopt(long = "path", name = "PATH", parse(from_os_str),
-                default_value = ".",
-    )]
+    #[structopt(long = "path", name = "PATH", parse(from_os_str), default_value = ".")]
     crate_path: PathBuf,
 
     /// Arguments to pass to program under test
@@ -90,7 +90,7 @@ pub struct Opt {
     verbosity: usize,
 }
 
-arg_enum!{
+arg_enum! {
     #[derive(Debug, PartialEq)]
     enum Backend {
         Proptest,
@@ -109,14 +109,28 @@ pub enum Status {
     Reachable,
 }
 
-fn main() {
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Status::Unknown => write!(f, "Unknown"),
+            Status::Verified => write!(f, "Verified"),
+            Status::Error => write!(f, "Error"),
+            Status::Timeout => write!(f, "Timeout"),
+            Status::Overflow => write!(f, "Overflow"),
+            Status::Reachable => write!(f, "Reachable"),
+        }
+    }
+}
+
+type CVResult<T> = Result<T, Box<dyn error::Error>>;
+
+fn main() -> CVResult<()> {
     let opt = Opt::from_args();
 
     #[rustfmt::skip]
     stderrlog::new()
         .verbosity(opt.verbosity)
-        .init()
-        .unwrap();
+        .init()?;
 
     if opt.backend == Backend::Proptest {
         if opt.replay > 0 && !opt.args.is_empty() {
@@ -145,6 +159,7 @@ fn main() {
     };
 
     if opt.clean {
+        info!("Running `cargo clean`");
         Command::new("cargo")
             .arg("clean")
             .current_dir(&opt.crate_path)
@@ -152,7 +167,7 @@ fn main() {
             .ok(); // Discarding the error on purpose.
     }
 
-    let package = get_meta_package_name(&opt.crate_path);
+    let package = get_meta_package_name(&opt.crate_path)?;
     info!("Checking {}", &package);
 
     let status = match opt.backend {
@@ -161,9 +176,9 @@ fn main() {
             run_proptest(&opt, &features)
         }
         _ => {
-            let target = get_default_host(&opt.crate_path);
+            let target = get_default_host(&opt.crate_path)?;
             info!("target: {}", target);
-            verify(&opt, &package, &features, &target)
+            verify(&opt, &package, &features, &target)?
         }
     };
 
@@ -172,34 +187,24 @@ fn main() {
     if status != Status::Verified {
         exit(1);
     }
+
+    Ok(())
 }
 
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Status::Unknown => write!(f, "Unknown"),
-            Status::Verified => write!(f, "Verified"),
-            Status::Error => write!(f, "Error"),
-            Status::Timeout => write!(f, "Timeout"),
-            Status::Overflow => write!(f, "Overflow"),
-            Status::Reachable => write!(f, "Reachable"),
-        }
-    }
-}
+fn get_meta_package_name(crate_dir: &Path) -> CVResult<String> {
+    let mut cmd = MetadataCommand::new();
+    cmd.manifest_path(
+        crate_dir
+            .iter()
+            .chain(iter::once(OsStr::new("Cargo.toml")))
+            .collect::<PathBuf>(),
+    );
+    // .features(CargoOpt::AllFeatures)
 
-fn get_meta_package_name(crate_dir: &PathBuf) -> String {
-    MetadataCommand::new()
-        .manifest_path(
-            crate_dir
-                .iter()
-                .chain(iter::once(OsStr::new("Cargo.toml")))
-                .collect::<PathBuf>(),
-        )
-        // .features(CargoOpt::AllFeatures)
-        .exec()
-        .unwrap()
+    let name = cmd
+        .exec()?
         .root_package()
-        .unwrap()
+        .ok_or("no root package")?
         .name
         .replace(
             |c| match c {
@@ -207,12 +212,14 @@ fn get_meta_package_name(crate_dir: &PathBuf) -> String {
                 _ => true,
             },
             "_",
-        )
+        );
+
+    Ok(name)
 }
 
-fn get_meta_target_directory(crate_dir: &PathBuf) -> PathBuf {
+fn get_meta_target_directory(crate_dir: &Path) -> CVResult<PathBuf> {
     // FIXME: add '--cfg=verify' to RUSTFLAGS, pass features to the command
-    MetadataCommand::new()
+    let dir = MetadataCommand::new()
         .manifest_path(
             crate_dir
                 .iter()
@@ -220,9 +227,10 @@ fn get_meta_target_directory(crate_dir: &PathBuf) -> PathBuf {
                 .collect::<PathBuf>(),
         )
         // .features(CargoOpt::AllFeatures)
-        .exec()
-        .unwrap()
-        .target_directory
+        .exec()?
+        .target_directory;
+
+    Ok(dir)
 }
 
 // Invoke proptest to compile and fuzz proptest targets
@@ -232,7 +240,7 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
         .args(vec!["-v"; opt.verbosity])
         .current_dir(&opt.crate_path);
 
-    if ! features.is_empty() {
+    if !features.is_empty() {
         cmd.arg("--features").arg(features.join(","));
     }
 
@@ -255,8 +263,8 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
 
     let output = cmd.output().expect("Failed to execute `cargo`");
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDERR: ", stderr.lines());
@@ -273,29 +281,28 @@ fn run_proptest(opt: &Opt, features: &[&str]) -> Status {
     }
 }
 
-fn get_default_host(crate_path: &PathBuf) -> String {
+fn get_default_host(crate_path: &Path) -> CVResult<String> {
     let mut cmd = Command::new("rustup");
-    cmd.arg("show")
-        .current_dir(crate_path);
+    cmd.arg("show").current_dir(crate_path);
 
     utils::info_cmd(&cmd, "rustup");
 
-    let output = cmd.output().expect("Failed to execute `rustup`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDERR: ", stderr.lines());
         utils::info_lines("STDOUT: ", stdout.lines());
-        error!("`rustup show` terminated unsuccessfully");
-        exit(1);
+        Err("`rustup show` terminated unsuccessfully")?
     }
 
-    stdout.lines()
+    Ok(stdout
+        .lines()
         .find_map(|l| l.strip_prefix("Default host:").and_then(|l| Some(l.trim())))
-        .expect("Unable to determine default host")
-        .to_string()
+        .ok_or("Unable to determine default host")?
+        .to_string())
 }
 
 fn compile(
@@ -303,7 +310,7 @@ fn compile(
     package: &str,
     features: &[&str],
     target: &str,
-) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
+) -> CVResult<(Vec<PathBuf>, Vec<PathBuf>)> {
     let mut rustflags = vec![
         "-Clto", // Generate linked bitcode for entire crate
         "-Cembed-bitcode=yes",
@@ -331,23 +338,18 @@ fn compile(
     }
 
     let rustflags = match std::env::var_os("RUSTFLAGS") {
-        Some(mut env_rustflags) => {
-            env_rustflags.push(" ");
-            env_rustflags.push(rustflags);
-            env_rustflags
-        }
+        Some(env_rustflags) => env_rustflags.append(" ").append(rustflags),
         None => OsString::from(rustflags),
     };
 
     // Find the target directory
     // (This may not be inside the crate if using workspaces)
-    let target_dir = get_meta_target_directory(&opt.crate_path);
-
+    let target_dir = get_meta_target_directory(&opt.crate_path)?;
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
 
-    if ! features.is_empty() {
+    if !features.is_empty() {
         cmd.arg("--features").arg(features.join(","));
     }
 
@@ -369,27 +371,26 @@ fn compile(
         .env("CC", "clang-10");
 
     utils::info_cmd(&cmd, "cargo");
-    info!("RUSTFLAGS='{}'", rustflags.to_str().unwrap());
+    info!("RUSTFLAGS='{}'", rustflags.to_str().ok_or("not UTF-8")?);
 
-    let output = cmd.output().expect("Failed to execute `cargo`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("FAILED: Couldn't compile");
-        return None;
+        Err("FAILED: Couldn't compile")?
     }
 
-    let mut deps_dir = target_dir.clone();
+    let mut deps_dir = PathBuf::from(&target_dir);
     deps_dir.extend([target, "debug", "deps"].iter());
     // {target_dir}/{target}/debug/deps/{package}*.bc
     let bc_files = deps_dir
-        .read_dir()
-        .unwrap()
-        .map(|e| e.unwrap().path())
+        .read_dir()?
+        .filter_map(Result::ok)
+        .map(|d| d.path())
         .filter(|p| {
             p.file_name()
                 .and_then(OsStr::to_str)
@@ -399,31 +400,27 @@ fn compile(
         })
         .collect::<Vec<_>>();
 
-    let mut build_dir = target_dir.clone();
+    let mut build_dir = PathBuf::from(&target_dir);
     build_dir.extend([target, "debug", "build"].iter());
     // {targetdir}/{target}/debug/build/ * /out/ *.o"
     let c_files = build_dir
-        .read_dir()
-        .unwrap()
+        .read_dir()?
         .filter_map(Result::ok)
-        .map(|d| {
-            let mut p = d.path();
-            p.push("out");
-            p
-        })
+        .map(|d| d.path().append("out"))
         .filter_map(|d| d.read_dir().ok())
         .flatten()
-        .map(|f| f.unwrap().path())
+        .filter_map(Result::ok)
+        .map(|d| d.path())
         .filter(|p| p.is_file() && p.extension() == Some(&OsString::from("o")))
         .collect::<Vec<_>>();
 
     // build_plan = read_build_plan(crate, flags)
     // print(json.dumps(build_plan, indent=4, sort_keys=True))
-    Some((bc_files, c_files))
+    Ok((bc_files, c_files))
 }
 
 // Count how many functions in fs are present in bitcode file
-fn count_symbols(bcfile: &PathBuf, fs: &[&str]) -> usize {
+fn count_symbols(bcfile: &Path, fs: &[&str]) -> usize {
     info!("    Counting symbols {:?} in {:?}", fs, bcfile);
 
     let mut cmd = Command::new("llvm-nm");
@@ -434,8 +431,8 @@ fn count_symbols(bcfile: &PathBuf, fs: &[&str]) -> usize {
 
     let output = cmd.output().expect("Failed to execute `llvm-nm`");
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    // let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    // let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     // TODO:
     // if ! output.status.success() {
@@ -451,7 +448,7 @@ fn count_symbols(bcfile: &PathBuf, fs: &[&str]) -> usize {
 }
 
 // Link multiple bitcode files together.
-fn link(crate_path: &PathBuf, out_file: &PathBuf, in_files: &[PathBuf]) -> bool {
+fn link(crate_path: &Path, out_file: &Path, in_files: &[PathBuf]) -> CVResult<()> {
     let mut cmd = Command::new("llvm-link");
     cmd.arg("-o")
         .arg(out_file)
@@ -459,19 +456,18 @@ fn link(crate_path: &PathBuf, out_file: &PathBuf, in_files: &[PathBuf]) -> bool 
         .current_dir(&crate_path);
 
     utils::info_cmd(&cmd, "llvm-link");
-    let output = cmd.output().expect("Failed to execute `llvm-link`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("FAILED: Couldn't link");
-        false
-    } else {
-        true
+        Err("FAILED: Couldn't link")?
     }
+
+    Ok(())
 }
 
 // Patch LLVM file to enable verification
@@ -483,42 +479,40 @@ fn link(crate_path: &PathBuf, out_file: &PathBuf, in_files: &[PathBuf]) -> bool 
 //   (this makes std::env::args() work)
 // - redirecting panic! to invoke backend-specific intrinsic functions
 //   for reporting errors
-fn patch_llvm(options: &[&str], bcfile: &PathBuf, new_bcfile: &PathBuf) -> bool {
+fn patch_llvm(options: &[&str], bcfile: &Path, new_bcfile: &Path) -> CVResult<()> {
     let mut cmd = Command::new("rvt-patch-llvm");
-    cmd.arg(bcfile).arg("-o").arg(new_bcfile).args(options);
-    // .current_dir(&crate_path)
+    cmd.arg(bcfile)
+        .arg("-o").arg(new_bcfile)
+        .args(options);
+        // .current_dir(&crate_path)
 
     utils::info_cmd(&cmd, "rvt-patch-llvm");
-    let output = cmd.output().expect("Failed to execute `rvt-patch-llvm`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("FAILED: Couldn't run rvt-patch-llvm");
-        false
-    } else {
-        true
+        Err("FAILED: Couldn't run rvt-patch-llvm")?
     }
+
+    Ok(())
 }
 
 // Generate a list of tests in the crate
 // by parsing the output of "cargo test -- --list"
-fn list_tests(crate_path: &PathBuf, features: &[&str]) -> Vec<String> {
+fn list_tests(crate_path: &Path, features: &[&str]) -> CVResult<Vec<String>> {
     let rustflags = match std::env::var_os("RUSTFLAGS") {
-        Some(mut env_rustflags) => {
-            env_rustflags.push(" --cfg=verify");
-            env_rustflags
-        }
+        Some(env_rustflags) => env_rustflags.append(" --cfg=verify"),
         None => OsString::from("--cfg=verify"),
     };
 
     let mut cmd = Command::new("cargo");
     cmd.arg("test");
 
-    if ! features.is_empty() {
+    if !features.is_empty() {
         cmd.arg("--features").arg(features.join(","));
     }
 
@@ -526,63 +520,57 @@ fn list_tests(crate_path: &PathBuf, features: &[&str]) -> Vec<String> {
         // .arg("--exclude-should-panic")
         .current_dir(&crate_path)
         .env("RUSTFLAGS", rustflags);
-    // .env("PATH", ...)
+        // .env("PATH", ...)
 
     utils::info_cmd(&cmd, "cargo");
-    let output = cmd.output().expect("Failed to execute `cargo`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if false && !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("Couldn't get list of tests");
-        exit(1)
+        Err("Couldn't get list of tests")?;
     }
 
     lazy_static! {
         static ref TEST: Regex = Regex::new(r"(\S+):\s+test\s*$").unwrap();
     }
-    stdout
-        .lines()
+
+    let tests = stdout.lines()
         .filter_map(|l| {
             TEST.captures(l)
                 .map(|caps| caps.get(1).unwrap().as_str().into())
         })
-        .collect()
+        .collect();
+
+    Ok(tests)
 }
 
 // Find a function defined in LLVM bitcode file
 //
 // This amounts to mangling the function names but is
 // more complicated because we don't have the hash value in our hand
-fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
-    info!("    Looking up {:?} in {:?}", names, bcfile);
+fn mangle_functions<T: AsRef<str>>(bcfile: &Path, names: &[T]) -> CVResult<Vec<(String, String)>> {
+    let names: HashSet<&str> = names.iter().map(AsRef::as_ref).collect();
 
-    // apply rustc-style name mangling
-    // let names: HashMap<String, String> = names.iter()
-    //     .map(|name| {
-    //         let mangled = name.iter().map(|s| format!("{}{}", s.len(), s)).collect::<Vec<_>>().join("");
-    //         (mangled, name.join("::"))
-    //     }).collect();
-    let names: HashSet<&str> = HashSet::from_iter(names.iter().cloned());
+    info!("    Looking up {:?} in {:?}", names, bcfile);
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);
     // .current_dir(&crate_path)
 
     utils::info_cmd(&cmd, "llvm-nm");
-    let output = cmd.output().expect("Failed to execute `llvm-nm`");
+    let output = cmd.output()?;
 
-    let stdout = from_utf8(&output.stdout).unwrap();
-    let stderr = from_utf8(&output.stderr).unwrap();
+    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
+    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
 
     if !output.status.success() {
         utils::info_lines("STDOUT: ", stdout.lines());
         utils::info_lines("STDERR: ", stderr.lines());
-        error!("FAILED: Couldn't run llvm-nm");
-        exit(1)
+        Err("FAILED: Couldn't run llvm-nm")?
     }
 
     let rs: Vec<(String, String)> = stdout
@@ -599,11 +587,10 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
                 } else {
                     &l[2]
                 };
-                let dname = format!("{:#}", demangle(mangled))
-                    .split("::")
-                    .skip(1)
-                    .collect::<Vec<_>>()
-                    .join("::");
+                let mut dname = format!("{:#}", demangle(mangled));
+                if let Some(i) = dname.find("::") {
+                    dname = dname[i + 2..].to_string();
+                }
                 if names.contains(dname.as_str()) {
                     Some((dname, mangled.into()))
                 } else {
@@ -621,14 +608,12 @@ fn mangle_functions(bcfile: &PathBuf, names: &[&str]) -> Vec<(String, String)> {
     // missing = set(paths) - paths.keys()
     let missing = names.len() - rs.len();
     if missing > 0 {
-        error!("Unable to find {} tests in bytecode file", missing);
-        exit(1)
+        Err(format!("Unable to find {} tests in bytecode file", missing))?
     }
-
-    rs
+    Ok(rs)
 }
 
-fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: &[&str]) -> Status {
+fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, features: &[&str]) -> CVResult<Status> {
     match opt.backend {
         Backend::Klee => klee::verify(&opt, &name, &entry, &bcfile, &features),
         Backend::Seahorn => seahorn::verify(&opt, &name, &entry, &bcfile, &features),
@@ -636,121 +621,88 @@ fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &PathBuf, features: 
     }
 }
 
-fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> Status {
+fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> CVResult<Status> {
     // Compile and link the patched file using LTO to generate the entire
     // application in a single LLVM file
     info!("  Compiling {}", package);
 
-    let (bcfiles, c_files) = match compile(opt, package, features, target) {
-        Some(files) => files,
-        None => return Status::Unknown,
-    };
+    let (bcfiles, c_files) = compile(opt, package, features, target)?;
 
-    let bcs: Vec<PathBuf> = bcfiles
+    let bcfiles: Vec<PathBuf> = bcfiles
         .into_iter()
-        .filter(|bc| -> bool { count_symbols(&bc, &["main", "_main"]) > 0 })
+        .filter(|bc| count_symbols(&bc, &["main", "_main"]) > 0)
         .collect();
 
-    let rust_file = match bcs.as_slice() {
-        [bc] => bc.clone(),
+    let mut bcfile: PathBuf = match bcfiles.as_slice() {
+        [_] => {
+            // Move element 0 out of the Vec (and into `bcfile`).
+            (bcfiles as Vec<_>).remove(0)
+        }
         [] => {
             if opt.tests || !opt.test.is_empty() {
-                error!("  FAILED: Use --tests with library crates");
+                Err("  FAILED: Use --tests with library crates")?
             } else {
-                error!("  FAILED: Test {} compilation error", &package);
+                Err(format!("  FAILED: Test {} compilation error", &package))?
             }
-            return Status::Unknown;
         }
         _ => {
-            error!("  FAILED: Test {} compilation error", &package);
-            info!("    Ambiguous bitcode files {:?}", &bcs);
-            return Status::Unknown;
+            info!("    Ambiguous bitcode files {:?}", &bcfiles);
+            Err(format!("  FAILED: Test {} compilation error", &package))?
         }
     };
 
-    let mut bcfile = if !c_files.is_empty() {
-        // Link bc file (from all the Rust code) against the c_files from
-        // any C/C++ code generated by build scripts
-
-        let bcfile = PathBuf::from("linked.bc");
-        if !link(
-            &opt.crate_path,
-            &bcfile,
-            &[vec![rust_file.clone()], c_files].concat(),
-        ) {
-            return Status::Unknown;
-        }
-        bcfile
-    } else {
-        rust_file.clone()
-    };
-
-    if opt.backend == Backend::Seahorn {
-        info!("  Patching LLVM file for Seahorn");
-        let mut ext = OsString::from("patch.");
-        ext.push(bcfile.extension().unwrap());
-        let mut new_bcfile = bcfile.clone();
-        new_bcfile.set_extension(&ext);
-        if !patch_llvm(&["--seahorn"], &bcfile, &new_bcfile) {
-            return Status::Unknown;
-        }
-        bcfile = new_bcfile;
-    }
-
-    let tests = {
+    let tests = if opt.tests || !opt.test.is_empty() {
         // If using the --tests flag, generate a list of tests and their mangled names
-        if opt.tests || !opt.test.is_empty() {
-            // get a list of the tests
-            info!("  Getting list of tests in {}", package);
-            let mut tests = list_tests(&opt.crate_path, &features);
-            if !opt.test.is_empty() {
-                tests = tests
-                    .into_iter()
-                    .filter(|t| opt.test.iter().any(|f| t.contains(f)))
-                    .collect();
-            }
-            if tests.is_empty() {
-                error!("No tests found");
-                return Status::Unknown;
-            }
-            // let tests: Vec<String> = tests.iter().map(|t| format!("{}::{}", package, t)).collect();
-
-            info!("  Checking {:?}", tests);
-
-            // then look up their mangled names in the bcfile
-            mangle_functions(
-                &rust_file,
-                &tests.iter().map(AsRef::as_ref).collect::<Vec<&str>>(),
-            )
-            // &tests.iter().map(|t| { t.split("::").collect::<Vec<_>>() }).collect::<Vec<_>>()
-        } else if opt.backend == Backend::Seahorn {
-            // Find the entry function (mangled main)
-            let mains = mangle_functions(&rust_file, &[&(String::from(package) + "::main")]);
-            match mains.as_slice() {
-                [] => {
-                    error!("  FAILED: can't find the 'main' function");
-                    return Status::Unknown;
-                }
-                [(_, _)] => {
-                    vec![("main".to_string(), (mains as Vec<(_, String)>).remove(0).1)]
-                }
-                _ => {
-                    error!("  FAILED: found more than one 'main' function");
-                    return Status::Unknown;
-                }
-            }
-        } else {
-            vec![("main".to_string(), "main".to_string())]
+        info!("  Getting list of tests in {}", &package);
+        let mut tests = list_tests(&opt.crate_path, &features)?;
+        if !opt.test.is_empty() {
+            tests = tests
+                .into_iter()
+                .filter(|t| opt.test.iter().any(|f| t.contains(f)))
+                .collect();
         }
+        if tests.is_empty() {
+            Err("No tests found")?
+        }
+        // let tests: Vec<String> = tests.iter().map(|t| format!("{}::{}", package, t)).collect();
+
+        info!("  Checking {:?}", tests);
+
+        // then look up their mangled names in the bcfile
+        mangle_functions(&bcfile, &tests)?
+    } else if opt.backend == Backend::Seahorn {
+        // Find the entry function (mangled main)
+        let mains = mangle_functions(&bcfile, &["main"])?;
+        match mains.as_slice() {
+            [(_, _)] => mains,
+            [] => Err("  FAILED: can't find the 'main' function")?,
+            _ => Err("  FAILED: found more than one 'main' function")?,
+        }
+    } else {
+        vec![("main".to_string(), "main".to_string())]
     };
     info!("  Mangled: {:?}", tests);
 
+    if !c_files.is_empty() {
+        // Link bc file (from all the Rust code) against the c_files from
+        // any C/C++ code generated by build scripts
+        info!("  Linking with c files.");
+        let new_bcfile = add_pre_ext(&bcfile, "link");
+        link(&opt.crate_path, &new_bcfile, &[vec![bcfile], c_files].concat())?;
+        bcfile = new_bcfile;
+    }
+
+    if opt.backend == Backend::Seahorn {
+        info!("  Patching LLVM file for Seahorn");
+        let new_bcfile = add_pre_ext(&bcfile, "patch");
+        patch_llvm(&["--seahorn"], &bcfile, &new_bcfile)?;
+        bcfile = new_bcfile;
+    }
+
     if !opt.args.is_empty() {
         info!("  Patching LLVM file for initializers");
-        let new_bcfile = PathBuf::from("linked.bc"); // FIXME: use a proper name
-        if !patch_llvm(&["--initializers"], &bcfile, &new_bcfile) {
-            return Status::Unknown;
-        }
+        let new_bcfile = add_pre_ext(&bcfile, "init");
+        patch_llvm(&["--initializers"], &bcfile, &new_bcfile)?;
         bcfile = new_bcfile;
     }
 
@@ -764,7 +716,14 @@ fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> Status {
 
     // TODO: use thread-pool to run the tests.
     for (name, entry) in tests {
-        let status = verifier_run(&opt, &name, &entry, &bcfile, &features);
+        let status = match verifier_run(&opt, &name, &entry, &bcfile, &features) {
+            Ok(status) => status,
+            Err(error) => {
+                error!("{}", error);
+                error!("Failed to run test '{}'.", name);
+                Status::Unknown
+            }
+        };
 
         if status == Status::Verified {
             println!("test {} ... ok", name);
@@ -785,5 +744,5 @@ fn verify(opt: &Opt, package: &str, features: &[&str], target: &str) -> Status {
     };
 
     println!("test result: {}. {} passed; {} failed", msg, passes, fails);
-    status
+    Ok(status)
 }
