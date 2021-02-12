@@ -34,7 +34,7 @@ pub fn info_cmd(cmd: &Command, name: &str) {
         "Running {} on '{}' with command `{} {}`",
         name,
         cmd.get_current_dir().and_then(Path::to_str).unwrap_or("."),
-        cmd.get_program().to_str().unwrap_or("???"),
+        cmd.get_program().to_str().unwrap(),
         cmd.get_args()
             .map(|s| s.to_str().unwrap())
             .collect::<Vec<_>>()
@@ -87,6 +87,8 @@ impl Append<Path> for PathBuf {
     }
 }
 
+/// Example:
+/// assert_eq!(add_pre_ext(&PathBuf::from("foo.bar"), "baz"), PathBuf::from("foo.baz.bar"))
 pub fn add_pre_ext<T: AsRef<OsStr>>(file: &Path, ext: T) -> PathBuf {
     assert!(file.is_file());
 

@@ -8,9 +8,9 @@
 
 #![feature(command_access)]
 
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{CargoOpt, MetadataCommand};
 use lazy_static::lazy_static;
-use log::{debug, error, info};
+use log::error;
 use rayon::prelude::*;
 use regex::Regex;
 use rustc_demangle::demangle;
@@ -20,7 +20,7 @@ use std::{
     collections::HashSet,
     error,
     ffi::{OsStr, OsString},
-    fmt, iter,
+    fmt,
     process::exit,
     str::from_utf8,
 };
@@ -242,7 +242,7 @@ fn main() -> CVResult<()> {
             .ok(); // Discarding the error on purpose.
     }
 
-    let package = get_meta_package_name(&opt.crate_path)?;
+    let package = get_meta_package_name(&opt)?;
     info_at!(&opt, 1, "Checking {}", &package);
 
     let status = match opt.backend {
@@ -252,7 +252,7 @@ fn main() -> CVResult<()> {
         }
         _ => {
             let target = get_default_host(&opt.crate_path)?;
-            debug!("target: {}", target);
+            info_at!(&opt, 4, "target: {}", target);
             verify(&opt, &package, &target)
         }
     }
@@ -289,7 +289,7 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
                 .collect();
         }
         if tests.is_empty() {
-            Err("No tests found")?
+            Err("  No tests found")?
         }
         let tests: Vec<String> = tests
             .iter()
@@ -297,10 +297,10 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
             .collect();
 
         // then look up their mangled names in the bcfile
-        mangle_functions(&bcfile, &tests)?
+        mangle_functions(&opt, &bcfile, &tests)?
     } else if opt.backend == Backend::Seahorn {
         // Find the entry function (mangled main)
-        let mains = mangle_functions(&bcfile, &[String::from(package) + "::main"])?;
+        let mains = mangle_functions(&opt, &bcfile, &[String::from(package) + "::main"])?;
         match mains.as_slice() {
             [(_, _)] => mains,
             [] => Err("  FAILED: can't find the 'main' function")?,
@@ -309,7 +309,7 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     } else {
         vec![("main".to_string(), "main".to_string())]
     };
-    // Remove the package name from the function name (important for Klee?).
+    // Remove the package name from the function names (important for Klee?).
     let tests: Vec<_> = tests
         .into_iter()
         .map(|(name, mangled)| {
@@ -320,11 +320,12 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
             }
         })
         .collect();
+
     #[rustfmt::skip]
     info_at!(&opt, 1, "  Checking {}",
              tests.iter().cloned().unzip::<_, _, Vec<_>, Vec<_>>().0.join(", ")
     );
-    debug!("Mangled: {:?}", tests);
+    info_at!(opt, 4, "Mangled: {:?}", tests);
 
     // For each test function, we run the backend and sift through its
     // output to generate an appropriate status string.
@@ -340,20 +341,21 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
             .build_global()?;
 
         tests
-            .par_iter()
-            .map(|(name, entry)| verifier_run(&opt, &name, &entry, &bcfile))
+            .par_iter() // <- parallelised iterator
+            .map(|(name, entry)| verifier_run(&opt, &bcfile, &name, &entry))
             .collect()
     } else {
         // Same as above but without the overhead of rayon
         tests
             .iter() // <- this is the only difference
-            .map(|(name, entry)| verifier_run(&opt, &name, &entry, &bcfile))
+            .map(|(name, entry)| verifier_run(&opt, &bcfile, &name, &entry))
             .collect()
     };
 
+    // Count pass/fail
     let passes = results.iter().filter(|r| **r == Status::Verified).count();
     let fails = results.len() - passes;
-    // randomly pick one failing status
+    // randomly pick one failing status (if any)
     let status = results
         .into_iter()
         .find(|r| *r != Status::Verified)
@@ -366,28 +368,19 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     Ok(status)
 }
 
-fn verifier_run(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> Status {
-    let result = match opt.backend {
+fn verifier_run(opt: &Opt, bcfile: &Path, name: &str, entry: &str) -> Status {
+    let status = match opt.backend {
         Backend::Klee => klee::verify(&opt, &name, &entry, &bcfile),
         Backend::Seahorn => seahorn::verify(&opt, &name, &entry, &bcfile),
         Backend::Proptest => unreachable!(),
-    };
-
-    let status = match result {
-        Ok(status) => status,
-        Err(error) => {
-            error!("{}", error);
-            error!("Failed to run test '{}'.", name);
-            Status::Unknown
-        }
-    };
-
-    if status == Status::Verified {
-        println!("test {} ... ok", name);
-    } else {
-        println!("test {} ... {:?}", name, status);
     }
+    .unwrap_or_else(|err| {
+        error!("{}", err);
+        error!("Failed to run test '{}'.", name);
+        Status::Unknown
+    });
 
+    println!("test {} ... {:#}", name, status);
     status
 }
 
@@ -482,7 +475,12 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
         .env("CC", "clang-10");
 
     utils::info_cmd(&cmd, "cargo");
-    info!("RUSTFLAGS='{}'", rustflags.to_str().ok_or("not UTF-8")?);
+    info_at!(
+        &opt,
+        4,
+        "RUSTFLAGS='{}'",
+        rustflags.to_str().ok_or("not UTF-8")?
+    );
 
     let output = cmd.output()?;
 
@@ -497,7 +495,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
 
     // Find the target directory
     // (This may not be inside the crate if using workspaces)
-    let target_dir = get_meta_target_directory(&opt.crate_path)?;
+    let target_dir = get_meta_target_directory(&opt)?;
 
     // {target_dir}/{target}/debug/deps/{package}*.bc
     let bc_files = target_dir
@@ -516,7 +514,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
                 && p.extension() == Some(&OsString::from("bc"))
         })
         // Only files that include a main function (should be exactly one file)
-        .filter(|p| count_symbols(&p, &["main", "_main"]) > 0)
+        .filter(|p| count_symbols(&opt, &p, &["main", "_main"]) > 0)
         .collect::<Vec<_>>();
 
     // Make sure there is only one such file.
@@ -533,7 +531,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
             }
         }
         _ => {
-            info_at!(&opt, 1, "    Ambiguous bitcode files {:?}", &bc_files);
+            error!("    Ambiguous bitcode files {:?}", &bc_files);
             Err(format!("  FAILED: Test {} compilation error", &package))?
         }
     };
@@ -610,24 +608,19 @@ fn patch_llvm(options: &[&str], bcfile: &Path, new_bcfile: &Path) -> CVResult<()
     Ok(())
 }
 
-fn get_meta_package_name(crate_dir: &Path) -> CVResult<String> {
-    let mut cmd = MetadataCommand::new();
-    cmd.manifest_path(
-        crate_dir
-            .iter()
-            .chain(iter::once(OsStr::new("Cargo.toml")))
-            .collect::<PathBuf>(),
-    );
-    // .features(CargoOpt::AllFeatures)
-
-    let name = cmd
+fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
+    let name = MetadataCommand::new()
+        .manifest_path(opt.crate_path.clone().append("Cargo.toml"))
+        .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .root_package()
         .ok_or("no root package")?
         .name
         .replace(
             |c| match c {
+                // Allowed characters.
                 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => false,
+                // Anything else will be replaced with the '_' character.
                 _ => true,
             },
             "_",
@@ -636,16 +629,11 @@ fn get_meta_package_name(crate_dir: &Path) -> CVResult<String> {
     Ok(name)
 }
 
-fn get_meta_target_directory(crate_dir: &Path) -> CVResult<PathBuf> {
-    // FIXME: add '--cfg=verify' to RUSTFLAGS, pass features to the command
+fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
+    // FIXME: add '--cfg=verify' to RUSTFLAGS?
     let dir = MetadataCommand::new()
-        .manifest_path(
-            crate_dir
-                .iter()
-                .chain(iter::once(OsStr::new("Cargo.toml")))
-                .collect::<PathBuf>(),
-        )
-        // .features(CargoOpt::AllFeatures)
+        .manifest_path(opt.crate_path.clone().append("Cargo.toml"))
+        .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .target_directory;
 
@@ -677,8 +665,8 @@ fn get_default_host(crate_path: &Path) -> CVResult<String> {
 }
 
 // Count how many functions in fs are present in bitcode file
-fn count_symbols(bcfile: &Path, fs: &[&str]) -> usize {
-    info!("    Counting symbols {:?} in {:?}", fs, bcfile);
+fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
+    info_at!(&opt, 4, "    Counting symbols {:?} in {:?}", fs, bcfile);
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);
@@ -700,12 +688,12 @@ fn count_symbols(bcfile: &Path, fs: &[&str]) -> usize {
         .filter(|l| l.len() == 3 && l[1] == "T" && fs.iter().any(|f| f == &l[2]))
         .count();
 
-    info!("    Found {} functions", count);
+    info_at!(&opt, 4, "    Found {} functions", count);
     count
 }
 
-// Generate a list of tests in the crate
-// by parsing the output of "cargo test -- --list"
+// Generate a list of tests in the crate by parsing the output of `cargo test --
+// --list`
 fn list_tests(opt: &Opt) -> CVResult<Vec<String>> {
     let rustflags = match std::env::var_os("RUSTFLAGS") {
         Some(env_rustflags) => env_rustflags.append(" --cfg=verify"),
@@ -722,8 +710,8 @@ fn list_tests(opt: &Opt) -> CVResult<Vec<String>> {
     cmd.args(&["--", "--list"])
         // .arg("--exclude-should-panic")
         .current_dir(&opt.crate_path)
+        // .env("PATH", ...)
         .env("RUSTFLAGS", rustflags);
-    // .env("PATH", ...)
 
     utils::info_cmd(&cmd, "cargo");
     let output = cmd.output()?;
@@ -756,10 +744,14 @@ fn list_tests(opt: &Opt) -> CVResult<Vec<String>> {
 //
 // This amounts to mangling the function names but is
 // more complicated because we don't have the hash value in our hand
-fn mangle_functions<T: AsRef<str>>(bcfile: &Path, names: &[T]) -> CVResult<Vec<(String, String)>> {
+fn mangle_functions(
+    opt: &Opt,
+    bcfile: &Path,
+    names: &[impl AsRef<str>],
+) -> CVResult<Vec<(String, String)>> {
     let names: HashSet<&str> = names.iter().map(AsRef::as_ref).collect();
 
-    info!("    Looking up {:?} in {:?}", names, bcfile);
+    info_at!(&opt, 4, "    Looking up {:?} in {:?}", names, bcfile);
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);
@@ -791,6 +783,7 @@ fn mangle_functions<T: AsRef<str>>(bcfile: &Path, names: &[T]) -> CVResult<Vec<(
                 } else {
                     &l[2]
                 };
+                // The alternative format ({:#}) is without the hash at the end.
                 let dname = format!("{:#}", demangle(mangled));
                 if names.contains(dname.as_str()) {
                     Some((dname, mangled.into()))
@@ -803,7 +796,7 @@ fn mangle_functions<T: AsRef<str>>(bcfile: &Path, names: &[T]) -> CVResult<Vec<(
         })
         .collect();
 
-    info!("      Found {:?}", rs);
+    info_at!(&opt, 4, "      Found {:?}", rs);
 
     // TODO: this doesn't look right:
     // missing = set(paths) - paths.keys()
