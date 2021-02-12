@@ -7,15 +7,11 @@
 // except according to those terms.
 
 use log::{info, warn};
-use std::process::Command;
+use std::str::from_utf8;
 use std::{ffi::OsString, path::Path};
-use std::{fs::remove_dir_all, str::from_utf8};
+use std::{fs, process::Command};
 
-use super::{
-    backends_common,
-    utils::{self, Append},
-    CVResult, Opt, Status,
-};
+use crate::{utils::Append, *};
 
 pub fn check_install() -> bool {
     // TODO: maybe it's better to check `seahorn --version`?
@@ -27,25 +23,19 @@ pub fn check_install() -> bool {
     }
 }
 
-pub fn verify(
-    opt: &Opt,
-    name: &str,
-    entry: &str,
-    bcfile: &Path,
-    _features: &[&str],
-) -> CVResult<Status> {
-    let out_dir = opt.crate_path.clone().append(&format!("seaout-{}", name));
+pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
+    let out_dir = opt.crate_path.clone().append("seaout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
-    remove_dir_all(&out_dir).unwrap_or_default();
-
+    fs::remove_dir_all(&out_dir).unwrap_or_default();
     if out_dir.exists() {
         Err(format!(
             "Directory or file '{:?}' already exists, and can't be removed",
             out_dir
         ))?
     }
+    fs::create_dir_all(&out_dir)?;
 
     info!("     Running Seahorn to verify {}", name);
     info!("      file: {:?}", bcfile);

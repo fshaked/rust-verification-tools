@@ -20,6 +20,15 @@ use std::{
 };
 use std::{path::Path, process::Command};
 
+macro_rules! info_at {
+    ($opt:expr, $lvl:expr, $($arg:tt)+) => ({
+        let lvl = $lvl;
+        if lvl <= $opt.verbosity {
+            println!($($arg)+);
+        }
+    });
+}
+
 pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
         "Running {} on '{}' with command `{} {}`",

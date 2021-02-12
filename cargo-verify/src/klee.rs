@@ -11,11 +11,10 @@ use log::{info, warn};
 use regex::Regex;
 use std::path::Path;
 use std::process::Command;
-use std::{collections::HashMap, ffi::OsString, fs::remove_dir_all, str::from_utf8};
+use std::{collections::HashMap, ffi::OsString, fs, str::from_utf8};
 
 use crate::utils::Append;
-
-use super::{backends_common, utils, CVResult, Opt, Status};
+use crate::*;
 
 pub fn check_install() -> bool {
     let output = Command::new("which").arg("klee").output().ok();
@@ -26,24 +25,19 @@ pub fn check_install() -> bool {
     }
 }
 
-pub fn verify(
-    opt: &Opt,
-    name: &str,
-    entry: &str,
-    bcfile: &Path,
-    features: &[&str],
-) -> CVResult<Status> {
-    let out_dir = opt.crate_path.clone().append(&format!("kleeout-{}", name));
+pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
+    let out_dir = opt.crate_path.clone().append("kleeout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
-    remove_dir_all(&out_dir).unwrap_or_default();
+    fs::remove_dir_all(&out_dir).unwrap_or_default();
     if out_dir.exists() {
         Err(format!(
             "Directory or file '{:?}' already exists, and can't be removed",
             out_dir
         ))?
     }
+    fs::create_dir_all(&out_dir)?;
 
     info!("     Running KLEE to verify {}", name);
     info!("      file: {:?}", bcfile);
@@ -104,7 +98,7 @@ pub fn verify(
 
         for ktest in ktests {
             println!("    Test input {}", ktest.to_str().unwrap_or("???"));
-            match replay_klee(&opt, &name, &ktest, &features) {
+            match replay_klee(&opt, &name, &ktest) {
                 Ok(()) => (),
                 Err(err) => warn!("Failed to replay: {}", err),
             }
@@ -308,23 +302,23 @@ fn run(
 }
 
 // Replay a KLEE "ktest" file
-fn replay_klee(opt: &Opt, name: &str, ktest: &Path, features: &[&str]) -> CVResult<()> {
+fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&opt.crate_path);
 
     if opt.tests || !opt.test.is_empty() {
         cmd.arg("test");
 
-        if !features.is_empty() {
-            cmd.arg("--features").arg(features.join(","));
+        if !opt.features.is_empty() {
+            cmd.arg("--features").arg(opt.features.join(","));
         }
 
         cmd.arg(&name).args(&["--", "--nocapture"]);
     } else {
         cmd.arg("run");
 
-        if !features.is_empty() {
-            cmd.arg("--features").arg(features.join(","));
+        if !opt.features.is_empty() {
+            cmd.arg("--features").arg(opt.features.join(","));
         }
 
         if !opt.args.is_empty() {
