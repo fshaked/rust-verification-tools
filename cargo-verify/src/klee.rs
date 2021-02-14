@@ -6,15 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::{collections::HashMap, ffi::OsString, fs, path::Path, process::Command, str::from_utf8};
+
 use lazy_static::lazy_static;
 use log::{info, warn};
 use regex::Regex;
-use std::path::Path;
-use std::process::Command;
-use std::{collections::HashMap, ffi::OsString, fs, str::from_utf8};
 
-use crate::utils::Append;
-use crate::*;
+use crate::{utils::Append, *};
 
 pub fn check_install() -> bool {
     let output = Command::new("which").arg("klee").output().ok();
@@ -26,23 +24,23 @@ pub fn check_install() -> bool {
 }
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
-    let out_dir = opt.crate_path.clone().append("kleeout").append(name);
+    let out_dir = opt.crate_dir.clone().append("kleeout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
     fs::remove_dir_all(&out_dir).unwrap_or_default();
     if out_dir.exists() {
         Err(format!(
-            "Directory or file '{:?}' already exists, and can't be removed",
-            out_dir
+            "Directory or file '{}' already exists, and can't be removed",
+            out_dir.to_string_lossy()
         ))?
     }
     fs::create_dir_all(&out_dir)?;
 
     info!("     Running KLEE to verify {}", name);
-    info!("      file: {:?}", bcfile);
+    info!("      file: {}", bcfile.to_string_lossy());
     info!("      entry: {}", entry);
-    info!("      results: {:?}", out_dir);
+    info!("      results: {}", out_dir.to_string_lossy());
 
     let (status, stats) = run(&opt, &name, &entry, &bcfile, &out_dir)?;
     if !stats.is_empty() {
@@ -64,7 +62,7 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            p.is_file() && TEST_ERR.is_match(p.file_name().unwrap().to_str().expect("not UTF-8"))
+            p.is_file() && TEST_ERR.is_match(p.file_name().unwrap().to_string_lossy().as_ref())
         })
         .collect::<Vec<_>>();
     failures.sort_unstable();
@@ -80,7 +78,7 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
                 .map(|e| e.path())
                 .filter(|p| {
                     p.is_file()
-                        && TEST_KTEST.is_match(p.file_name().unwrap().to_str().expect("not UTF-8"))
+                        && TEST_KTEST.is_match(p.file_name().unwrap().to_string_lossy().as_ref())
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -193,7 +191,7 @@ fn run(
         None => (),
     }
 
-    cmd.arg(bcfile).args(&opt.args).current_dir(&opt.crate_path);
+    cmd.arg(bcfile).args(&opt.args).current_dir(&opt.crate_dir);
 
     utils::info_cmd(&cmd, "KLEE");
 
@@ -267,7 +265,7 @@ fn run(
             Status::Unknown
         });
 
-    info!("Status: '{}' expected: '{:?}'", status, expect);
+    info!("Status: '{}' expected: '{}'", status, expect.unwrap_or("---"));
 
     // Scan for statistics
     lazy_static! {
@@ -304,7 +302,7 @@ fn run(
 // Replay a KLEE "ktest" file
 fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(&opt.crate_path);
+    cmd.current_dir(&opt.crate_dir);
 
     if opt.tests || !opt.test.is_empty() {
         cmd.arg("test");

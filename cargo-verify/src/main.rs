@@ -8,22 +8,22 @@
 
 #![feature(command_access)]
 
+use std::{
+    collections::HashSet,
+    error,
+    ffi::{OsString},
+    fmt,
+    path::{Path, PathBuf},
+    process::{exit, Command},
+    str::from_utf8,
+};
+
 use cargo_metadata::{CargoOpt, MetadataCommand};
 use lazy_static::lazy_static;
 use log::error;
 use rayon::prelude::*;
 use regex::Regex;
 use rustc_demangle::demangle;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::{
-    collections::HashSet,
-    error,
-    ffi::{OsStr, OsString},
-    fmt,
-    process::exit,
-    str::from_utf8,
-};
 use structopt::{clap::arg_enum, StructOpt};
 use utils::{add_pre_ext, Append};
 
@@ -46,7 +46,7 @@ pub struct Opt {
     // (i.e., path to Cargo.toml)
     /// Filesystem path to local crate to verify
     #[structopt(long = "path", name = "PATH", parse(from_os_str), default_value = ".")]
-    crate_path: PathBuf,
+    crate_dir: PathBuf,
 
     /// Arguments to pass to program under test
     #[structopt(name = "ARG", last = true)]
@@ -237,7 +237,7 @@ fn main() -> CVResult<()> {
         info_at!(&opt, 1, "Running `cargo clean`");
         Command::new("cargo")
             .arg("clean")
-            .current_dir(&opt.crate_path)
+            .current_dir(&opt.crate_dir)
             .output()
             .ok(); // Discarding the error on purpose.
     }
@@ -251,7 +251,7 @@ fn main() -> CVResult<()> {
             proptest::run(&opt)
         }
         _ => {
-            let target = get_default_host(&opt.crate_path)?;
+            let target = get_default_host(&opt.crate_dir)?;
             info_at!(&opt, 4, "target: {}", target);
             verify(&opt, &package, &target)
         }
@@ -394,7 +394,7 @@ fn build(opt: &Opt, package: &str, target: &str) -> CVResult<PathBuf> {
         info_at!(&opt, 1, "  Linking with c files.");
         let new_bc_file = add_pre_ext(&bc_file, "link");
         link(
-            &opt.crate_path,
+            &opt.crate_dir,
             &new_bc_file,
             &[vec![bc_file], c_files].concat(),
         )?;
@@ -467,7 +467,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     // FIXME: "=="?
     cmd.arg(format!("--target=={}", target))
         .args(vec!["-v"; opt.verbosity])
-        .current_dir(&opt.crate_path)
+        .current_dir(&opt.crate_dir)
         .env("RUSTFLAGS", &rustflags)
         // .env("PATH", ...)
         .env("CRATE_CC_NO_DEFAULTS", "true")
@@ -508,8 +508,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
         .map(|d| d.path())
         .filter(|p| {
             p.file_name()
-                .and_then(OsStr::to_str)
-                .map(|f| f.starts_with(package))
+                .map(|f| f.to_string_lossy().starts_with(package))
                 .unwrap_or(false)
                 && p.extension() == Some(&OsString::from("bc"))
         })
@@ -531,7 +530,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
             }
         }
         _ => {
-            error!("    Ambiguous bitcode files {:?}", &bc_files);
+            error!("    Ambiguous bitcode files {}", bc_files.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join(", "));
             Err(format!("  FAILED: Test {} compilation error", &package))?
         }
     };
@@ -610,7 +609,7 @@ fn patch_llvm(options: &[&str], bcfile: &Path, new_bcfile: &Path) -> CVResult<()
 
 fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
     let name = MetadataCommand::new()
-        .manifest_path(opt.crate_path.clone().append("Cargo.toml"))
+        .manifest_path(opt.crate_dir.clone().append("Cargo.toml"))
         .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .root_package()
@@ -632,7 +631,7 @@ fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
 fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
     // FIXME: add '--cfg=verify' to RUSTFLAGS?
     let dir = MetadataCommand::new()
-        .manifest_path(opt.crate_path.clone().append("Cargo.toml"))
+        .manifest_path(opt.crate_dir.clone().append("Cargo.toml"))
         .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .target_directory;
@@ -666,7 +665,7 @@ fn get_default_host(crate_path: &Path) -> CVResult<String> {
 
 // Count how many functions in fs are present in bitcode file
 fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
-    info_at!(&opt, 4, "    Counting symbols {:?} in {:?}", fs, bcfile);
+    info_at!(&opt, 4, "    Counting symbols {:?} in {}", fs, bcfile.to_string_lossy());
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);
@@ -709,7 +708,7 @@ fn list_tests(opt: &Opt) -> CVResult<Vec<String>> {
 
     cmd.args(&["--", "--list"])
         // .arg("--exclude-should-panic")
-        .current_dir(&opt.crate_path)
+        .current_dir(&opt.crate_dir)
         // .env("PATH", ...)
         .env("RUSTFLAGS", rustflags);
 
@@ -741,9 +740,7 @@ fn list_tests(opt: &Opt) -> CVResult<Vec<String>> {
 }
 
 // Find a function defined in LLVM bitcode file
-//
-// This amounts to mangling the function names but is
-// more complicated because we don't have the hash value in our hand
+// Demangle all the function names, and compare tham to `names`.
 fn mangle_functions(
     opt: &Opt,
     bcfile: &Path,
@@ -751,7 +748,7 @@ fn mangle_functions(
 ) -> CVResult<Vec<(String, String)>> {
     let names: HashSet<&str> = names.iter().map(AsRef::as_ref).collect();
 
-    info_at!(&opt, 4, "    Looking up {:?} in {:?}", names, bcfile);
+    info_at!(&opt, 4, "    Looking up {:?} in {}", names, bcfile.to_string_lossy());
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);

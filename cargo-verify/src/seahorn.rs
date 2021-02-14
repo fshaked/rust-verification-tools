@@ -6,10 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::{ffi::OsString, fs, path::Path, process::Command, str::from_utf8};
+
 use log::{info, warn};
-use std::str::from_utf8;
-use std::{ffi::OsString, path::Path};
-use std::{fs, process::Command};
 
 use crate::{utils::Append, *};
 
@@ -24,23 +23,23 @@ pub fn check_install() -> bool {
 }
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
-    let out_dir = opt.crate_path.clone().append("seaout").append(name);
+    let out_dir = opt.crate_dir.clone().append("seaout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
     fs::remove_dir_all(&out_dir).unwrap_or_default();
     if out_dir.exists() {
         Err(format!(
-            "Directory or file '{:?}' already exists, and can't be removed",
-            out_dir
+            "Directory or file '{}' already exists, and can't be removed",
+            out_dir.to_string_lossy()
         ))?
     }
     fs::create_dir_all(&out_dir)?;
 
     info!("     Running Seahorn to verify {}", name);
-    info!("      file: {:?}", bcfile);
+    info!("      file: {}", bcfile.to_string_lossy());
     info!("      entry: {}", entry);
-    info!("      results: {:?}", out_dir);
+    info!("      results: {}", out_dir.to_string_lossy());
 
     run(&opt, &name, &entry, &bcfile, &out_dir)
 }
@@ -118,7 +117,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
 
     cmd.arg(&bcfile)
         // .args(&opt.args)
-        .current_dir(&opt.crate_path);
+        .current_dir(&opt.crate_dir);
 
     utils::info_cmd(&cmd, "Seahorn");
 
@@ -173,7 +172,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
             Status::Unknown
         });
 
-    info!("Status: '{}' expected: '{:?}'", status, expect);
+    info!("Status: '{}' expected: '{}'", status, expect.unwrap_or("---"));
 
     // TODO: Scan for statistics
 

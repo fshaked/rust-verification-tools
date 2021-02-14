@@ -11,15 +11,12 @@
 // core functionality).
 ////////////////////////////////////////////////////////////////////////////////
 
-use log::info;
-use std::{
-    borrow::{Borrow, ToOwned},
-    ffi::{OsStr, OsString},
-    path::PathBuf,
-    str::Lines,
-};
-use std::{path::Path, process::Command};
+use std::{borrow::{Borrow, ToOwned}, ffi::{OsStr, OsString}, path::{Path, PathBuf}, process::Command, str::Lines};
 
+use log::info;
+
+// `info_at!(&opt, level, ...)` will print the formatted message `...` if
+// verbosity level is `level` or higher.
 macro_rules! info_at {
     ($opt:expr, $lvl:expr, $($arg:tt)+) => ({
         let lvl = $lvl;
@@ -29,19 +26,21 @@ macro_rules! info_at {
     });
 }
 
+// Use `info!` to print the `cmd`.
 pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
         "Running {} on '{}' with command `{} {}`",
         name,
-        cmd.get_current_dir().and_then(Path::to_str).unwrap_or("."),
-        cmd.get_program().to_str().unwrap(),
+        cmd.get_current_dir().unwrap_or(&PathBuf::from(".")).to_string_lossy(),
+        cmd.get_program().to_string_lossy(),
         cmd.get_args()
-            .map(|s| s.to_str().unwrap())
+            .map(|s| s.to_string_lossy())
             .collect::<Vec<_>>()
             .join(" ")
     );
 }
 
+// Print each line of `Lines` using `info!`, prefixed with `prefix`.
 pub fn info_lines(prefix: &str, lines: Lines) {
     for l in lines {
         info!("{}{}", prefix, l);
@@ -58,6 +57,10 @@ pub fn from_latin1(s: &[u8]) -> String {
     s.iter().map(|&c| c as char).collect()
 }
 
+// The Append trait lets you chain `append` calls where usually you would have
+// to mutate (e.g. using `push`).
+// Example:
+// assert_eq!(String::from("foo").append("bar"), { let mut x = String::from("foo"); x.push_str("bar"); x })
 pub trait Append<Segment: ?Sized>: Sized
 where
     Segment: ToOwned<Owned = Self>,
@@ -66,6 +69,7 @@ where
     fn append(self: Self, s: impl AsRef<Segment>) -> Self;
 }
 
+// Concatenate `s` to the end of `self`.
 impl Append<str> for String {
     fn append(mut self: String, s: impl AsRef<str>) -> String {
         self.push_str(s.as_ref());
@@ -73,6 +77,7 @@ impl Append<str> for String {
     }
 }
 
+// Concatenate `s` to the end of `self`.
 impl Append<OsStr> for OsString {
     fn append(mut self: OsString, s: impl AsRef<OsStr>) -> OsString {
         self.push(s);
@@ -80,6 +85,7 @@ impl Append<OsStr> for OsString {
     }
 }
 
+// Add `s` to the end of `self`, as a new component.
 impl Append<Path> for PathBuf {
     fn append(mut self: PathBuf, s: impl AsRef<Path>) -> PathBuf {
         self.push(s);
@@ -89,7 +95,7 @@ impl Append<Path> for PathBuf {
 
 /// Example:
 /// assert_eq!(add_pre_ext(&PathBuf::from("foo.bar"), "baz"), PathBuf::from("foo.baz.bar"))
-pub fn add_pre_ext<T: AsRef<OsStr>>(file: &Path, ext: T) -> PathBuf {
+pub fn add_pre_ext(file: &Path, ext: impl AsRef<OsStr>) -> PathBuf {
     assert!(file.is_file());
 
     let new_ext = match file.extension() {

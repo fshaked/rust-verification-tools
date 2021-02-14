@@ -12,17 +12,13 @@ pub fn check_install() -> bool {
     true
 }
 
-pub fn get_features() -> Vec<String> {
-    vec![]
-}
-
 pub fn run(opt: &Opt) -> CVResult<Status> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test")
         .args(vec!["-v"; opt.verbosity])
-        .current_dir(&opt.crate_path);
+        .current_dir(&opt.crate_dir);
 
-    if ! opt.features.is_empty() {
+    if !opt.features.is_empty() {
         cmd.arg("--features").arg(opt.features.join(","));
     }
 
