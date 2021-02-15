@@ -14,6 +14,7 @@
 use std::{
     borrow::{Borrow, ToOwned},
     ffi::{OsStr, OsString},
+    iter,
     path::{Path, PathBuf},
     process::Command,
     str::Lines,
@@ -35,17 +36,34 @@ macro_rules! info_at {
 // Use `info!` to print the `cmd`.
 pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
-        "Running {} on '{}' with command `{} {}`",
+        "Running {} on '{}' with command:\n`{}`",
         name,
         cmd.get_current_dir()
             .unwrap_or(&PathBuf::from("."))
             .to_string_lossy(),
-        cmd.get_program().to_string_lossy(),
-        cmd.get_args()
-            .map(|s| s.to_string_lossy())
+        iter::once(cmd.get_program())
+            .chain(cmd.get_args())
+            .map(|s| shell_escape::escape(s.to_string_lossy()))
             .collect::<Vec<_>>()
             .join(" ")
     );
+
+    let envs = cmd.get_envs();
+    if envs.len() > 0 {
+        info!(
+            "with environment variables:\n{}",
+            envs.map(|(var, val)| match val {
+                Some(val) => format!(
+                    "{}={}",
+                    var.to_string_lossy(),
+                    shell_escape::escape(val.to_string_lossy())
+                ),
+                None => format!("{}=''", var.to_string_lossy()), // explicitly removed
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
+    }
 }
 
 // Print each line of `Lines` using `info!`, prefixed with `prefix`.

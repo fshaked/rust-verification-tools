@@ -17,4 +17,5 @@ rustc-demangle = "0.1"
 rayon = "1.5.0"
 num_cpus = "1.0"
 glob = "0.3.0"
+shell-escape = "0.1.5"
 # inkwell = { git = "https://github.com/alastairreid/inkwell", features = ["llvm10-0"] }
