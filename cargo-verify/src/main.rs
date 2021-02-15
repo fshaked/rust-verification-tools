@@ -43,9 +43,9 @@ mod seahorn;
 pub struct Opt {
     // TODO: make this more like 'cargo test --manifest-path <PATH>'
     // (i.e., path to Cargo.toml)
-    /// Filesystem path to local crate to verify
-    #[structopt(long = "path", name = "PATH", parse(from_os_str), default_value = ".")]
-    crate_dir: PathBuf,
+    /// Path to Cargo.toml
+    #[structopt(long = "manifest-path", name = "PATH", parse(from_os_str), default_value = "Cargo.toml")]
+    cargo_toml: PathBuf,
 
     /// Arguments to pass to program under test
     #[structopt(name = "ARG", last = true)]
@@ -242,7 +242,8 @@ fn main() -> CVResult<()> {
         info_at!(&opt, 1, "Running `cargo clean`");
         Command::new("cargo")
             .arg("clean")
-            .current_dir(&opt.crate_dir)
+            .arg("--manifest-path")
+            .arg(&opt.cargo_toml)
             .output()
             .ok(); // Discarding the error on purpose.
     }
@@ -256,7 +257,7 @@ fn main() -> CVResult<()> {
             proptest::run(&opt)
         }
         _ => {
-            let target = get_default_host(&opt.crate_dir)?;
+            let target = get_default_host(&opt.cargo_toml.parent().unwrap_or(&PathBuf::from(".")))?;
             info_at!(&opt, 4, "target: {}", target);
             verify(&opt, &package, &target)
         }
@@ -480,7 +481,7 @@ fn get_build_envs(opt: &Opt) -> CVResult<Vec<(String, String)>> {
 
 fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<PathBuf>)> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build");
+    cmd.arg("build").arg("--manifest-path").arg(&opt.cargo_toml);
 
     if !opt.features.is_empty() {
         cmd.arg("--features").arg(opt.features.join(","));
@@ -496,7 +497,6 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     // FIXME: "=="?
     cmd.arg(format!("--target={}", target))
         .args(vec!["-v"; opt.verbosity])
-        .current_dir(&opt.crate_dir)
         .envs(get_build_envs(&opt)?);
     // .env("PATH", ...)
 
@@ -638,7 +638,7 @@ fn patch_llvm(opt: &Opt, options: &[&str], bcfile: &Path, new_bcfile: &Path) -> 
 
 fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
     let name = MetadataCommand::new()
-        .manifest_path(opt.crate_dir.clone().append("Cargo.toml"))
+        .manifest_path(&opt.cargo_toml)
         .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .root_package()
@@ -660,7 +660,7 @@ fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
 fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
     // FIXME: add '--cfg=verify' to RUSTFLAGS?
     let dir = MetadataCommand::new()
-        .manifest_path(opt.crate_dir.clone().append("Cargo.toml"))
+        .manifest_path(&opt.cargo_toml)
         .features(CargoOpt::SomeFeatures(opt.features.clone()))
         .exec()?
         .target_directory;
@@ -729,7 +729,7 @@ fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
 // --list`
 fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("test");
+    cmd.arg("test").arg("--manifest-path").arg(&opt.cargo_toml);
 
     if !opt.features.is_empty() {
         cmd.arg("--features").arg(opt.features.join(","));
@@ -737,7 +737,6 @@ fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
 
     cmd.arg(format!("--target={}", target))
         .args(vec!["-v"; opt.verbosity])
-        .current_dir(&opt.crate_dir)
         .envs(get_build_envs(&opt)?)
         .args(&["--", "--list"]);
     // .arg("--exclude-should-panic")

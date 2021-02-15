@@ -15,8 +15,9 @@ pub fn check_install() -> bool {
 pub fn run(opt: &Opt) -> CVResult<Status> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test")
-        .args(vec!["-v"; opt.verbosity])
-        .current_dir(&opt.crate_dir);
+        .arg("--manifest-path")
+        .arg(&opt.cargo_toml)
+        .args(vec!["-v"; opt.verbosity]);
 
     if !opt.features.is_empty() {
         cmd.arg("--features").arg(opt.features.join(","));

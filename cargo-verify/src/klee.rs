@@ -24,7 +24,7 @@ pub fn check_install() -> bool {
 }
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
-    let out_dir = opt.crate_dir.clone().append("kleeout").append(name);
+    let out_dir = opt.cargo_toml.with_file_name("kleeout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
@@ -171,8 +171,8 @@ fn run(
     .arg(out_dir)
     .args(&opt.backend_flags)
     .arg(bcfile)
-    .args(&opt.args)
-    .current_dir(&opt.crate_dir);
+    .args(&opt.args);
+    // .current_dir(&opt.crate_dir);
 
     utils::info_cmd(&cmd, "KLEE");
 
@@ -287,7 +287,7 @@ fn run(
 // Replay a KLEE "ktest" file
 fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(&opt.crate_dir);
+    cmd.arg("--manifest-path").arg(&opt.cargo_toml);
 
     if opt.tests || !opt.test.is_empty() {
         cmd.arg("test");

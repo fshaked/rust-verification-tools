@@ -23,7 +23,7 @@ pub fn check_install() -> bool {
 }
 
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
-    let out_dir = opt.crate_dir.clone().append("seaout").append(name);
+    let out_dir = opt.cargo_toml.with_file_name("seaout").append(name);
 
     // Ignoring result. We don't care if it fails because the path doesn't
     // exist.
@@ -106,9 +106,8 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
     cmd.arg(OsString::from("--temp-dir=").append(out_dir))
         .arg(String::from("--entry=") + entry)
         .args(&opt.backend_flags)
-        .arg(&bcfile)
+        .arg(&bcfile);
         // .args(&opt.args)
-        .current_dir(&opt.crate_dir);
 
     utils::info_cmd(&cmd, "Seahorn");
 
