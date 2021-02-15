@@ -11,7 +11,7 @@
 use std::{
     collections::HashSet,
     error,
-    ffi::{OsString},
+    ffi::OsString,
     fmt,
     path::{Path, PathBuf},
     process::{exit, Command},
@@ -19,6 +19,7 @@ use std::{
 };
 
 use cargo_metadata::{CargoOpt, MetadataCommand};
+use glob::glob;
 use lazy_static::lazy_static;
 use log::error;
 use rayon::prelude::*;
@@ -52,29 +53,30 @@ pub struct Opt {
     #[structopt(name = "ARG", last = true)]
     args: Vec<String>,
 
-    // backend_arg is used for hold the CL option. After parsing, if the user
-    // didn't specify a backend, we will auto-detect one, and hold it in the
-    // `backend` field below.
+    // backend_arg is used for holding the CL option. After parsing, if the user
+    // specified a backend it will be copied to the `backend` field below, if
+    // the user didn't specify a backend, we will auto-detect one, and put it
+    // in the `backend` field.
     /// Select verification backend
     #[structopt(
         short = "b",
         long = "backend",
         name = "BACKEND",
         possible_values = &Backend::variants(),
-        // default_value = "Klee", // FIXME: is that a sensible choice?
+        case_insensitive = true,
     )]
     backend_arg: Option<Backend>,
 
     // See the comment of `backend_arg` above.
-    #[structopt(skip)]
+    #[structopt(skip = Backend::Klee)] // the initial value has no meaning, it will be overwritten
     backend: Backend,
 
     /// Extra verification flags
-    #[structopt(long)]
-    backend_flags: Option<String>,
+    #[structopt(long, number_of_values = 1, use_delimiter = true)]
+    backend_flags: Vec<String>,
 
     /// Space or comma separated list of features to activate
-    #[structopt(long, number_of_values = 1, name = "FEATURES")]
+    #[structopt(long, name = "FEATURES", number_of_values = 1, use_delimiter = true)]
     features: Vec<String>,
 
     /// Run `cargo clean` first
@@ -90,9 +92,10 @@ pub struct Opt {
     #[structopt(long, number_of_values = 1, name = "TESTNAME")]
     test: Vec<String>,
 
-    // jobs_arg is used for hold the CL option. After parsing, if the user
-    // didn't specify this option, we will use num_cpus, and hold it in the
-    // `jobs` field below.
+    // jobs_arg is used for holding the CL option. After parsing, if the user
+    // specified a value it will be copied to the `jobs` field below, if the
+    // user didn't specify a value, we will use num_cpus, and put it in the
+    // `jobs` field.
     /// Number of parallel jobs, defaults to # of CPUs
     #[structopt(short = "j", long = "jobs", name = "N")]
     jobs_arg: Option<usize>,
@@ -119,12 +122,6 @@ arg_enum! {
     }
 }
 
-impl Default for Backend {
-    fn default() -> Self {
-        Backend::Proptest
-    }
-}
-
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Status {
     Unknown, // E.g. the varifier failed to execute.
@@ -144,6 +141,7 @@ impl fmt::Display for Status {
                     // "{:#}"
                     write!(f, "ok")
                 } else {
+                    // "{}"
                     write!(f, "Verified")
                 }
             }
@@ -161,7 +159,7 @@ fn process_command_line() -> CVResult<Opt> {
     // cargo-verify can be called directly, or by placing it on the `PATH` and
     // calling it through `cargo` (i.e. `cargo verify ...`.
     let mut args: Vec<_> = std::env::args().collect();
-    if args.len() >= 2 && args[1] == "verify" {
+    if args.get(1).map(AsRef::as_ref) == Some("verify") {
         // Looks like the script was invoked by `cargo verify` - we have to
         // remove the second argument.
         args.remove(1);
@@ -169,9 +167,12 @@ fn process_command_line() -> CVResult<Opt> {
     let mut opt = Opt::from_iter(args.into_iter());
     // let mut opt = Opt::from_args();
 
-    // Check if the backend that was specified on the CL is installed; if none
-    // was specified, use the first one that we find.
     opt.backend = match opt.backend_arg {
+        // Check if the backend that was specified on the CL is installed.
+        Some(Backend::Proptest) => {
+            assert!(proptest::check_install());
+            Backend::Proptest
+        }
         Some(Backend::Klee) => {
             if !klee::check_install() {
                 Err("Klee is not installed")?;
@@ -184,11 +185,8 @@ fn process_command_line() -> CVResult<Opt> {
             }
             Backend::Seahorn
         }
-        Some(Backend::Proptest) => {
-            assert!(proptest::check_install());
-            Backend::Proptest
-        }
         None => {
+            // If the user did not specify a backend, use the first one that we find.
             let backend = if klee::check_install() {
                 Backend::Klee
             } else if seahorn::check_install() {
@@ -201,6 +199,14 @@ fn process_command_line() -> CVResult<Opt> {
             backend
         }
     };
+
+    // To be compatible with `cargo test`, features might be space separated.
+    opt.features = opt
+        .features
+        .iter()
+        .flat_map(|s| s.split(' '))
+        .map(String::from)
+        .collect::<Vec<_>>();
 
     // Backend specific options.
     match opt.backend {
@@ -224,6 +230,7 @@ fn process_command_line() -> CVResult<Opt> {
         }
     }
 
+    // Use the user specified number of jobs, or the number of CPUs.
     opt.jobs = opt.jobs_arg.unwrap_or(num_cpus::get());
 
     Ok(opt)
@@ -475,12 +482,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
         .env("CC", "clang-10");
 
     utils::info_cmd(&cmd, "cargo");
-    info_at!(
-        &opt,
-        4,
-        "RUSTFLAGS='{}'",
-        rustflags.to_str().ok_or("not UTF-8")?
-    );
+    info_at!(&opt, 4, "RUSTFLAGS='{}'", rustflags.to_string_lossy(),);
 
     let output = cmd.output()?;
 
@@ -498,23 +500,22 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     let target_dir = get_meta_target_directory(&opt)?;
 
     // {target_dir}/{target}/debug/deps/{package}*.bc
-    let bc_files = target_dir
-        .clone()
-        .append(target)
-        .append("debug")
-        .append("deps")
-        .read_dir()?
-        .filter_map(Result::ok)
-        .map(|d| d.path())
-        .filter(|p| {
-            p.file_name()
-                .map(|f| f.to_string_lossy().starts_with(package))
-                .unwrap_or(false)
-                && p.extension() == Some(&OsString::from("bc"))
-        })
-        // Only files that include a main function (should be exactly one file)
-        .filter(|p| count_symbols(&opt, &p, &["main", "_main"]) > 0)
-        .collect::<Vec<_>>();
+    let bc_files = glob(
+        &glob::Pattern::escape(
+            target_dir
+                .clone()
+                .append(target)
+                .append("debug")
+                .append("deps")
+                .append(package)
+                .to_str()
+                .ok_or("not UTF-8")?,
+        )
+        .append("*.bc"),
+    )?
+    .filter_map(Result::ok)
+    .filter(|p| count_symbols(&opt, p, &["main", "_main"]) > 0)
+    .collect::<Vec<_>>();
 
     // Make sure there is only one such file.
     let bc_file: PathBuf = match bc_files.as_slice() {
@@ -530,25 +531,33 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
             }
         }
         _ => {
-            error!("    Ambiguous bitcode files {}", bc_files.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join(", "));
+            error!(
+                "    Ambiguous bitcode files {}",
+                bc_files
+                    .iter()
+                    .map(|p| p.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             Err(format!("  FAILED: Test {} compilation error", &package))?
         }
     };
 
     // {targetdir}/{target}/debug/build/ * /out/ *.o"
-    let c_files = target_dir
-        .append(target)
-        .append("debug")
-        .append("build")
-        .read_dir()?
-        .filter_map(Result::ok)
-        .map(|d| d.path().append("out"))
-        .filter_map(|d| d.read_dir().ok())
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|d| d.path())
-        .filter(|p| p.is_file() && p.extension() == Some(&OsString::from("o")))
-        .collect::<Vec<_>>();
+    let c_files = glob(
+        &glob::Pattern::escape(
+            target_dir
+                .clone()
+                .append(target)
+                .append("debug")
+                .append("build")
+                .to_str()
+                .ok_or("not UTF-8")?,
+        )
+        .append("/*/out/*.o"),
+    )?
+    .filter_map(Result::ok)
+    .collect::<Vec<_>>();
 
     // build_plan = read_build_plan(crate, flags)
     // print(json.dumps(build_plan, indent=4, sort_keys=True))
@@ -665,7 +674,13 @@ fn get_default_host(crate_path: &Path) -> CVResult<String> {
 
 // Count how many functions in fs are present in bitcode file
 fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
-    info_at!(&opt, 4, "    Counting symbols {:?} in {}", fs, bcfile.to_string_lossy());
+    info_at!(
+        &opt,
+        4,
+        "    Counting symbols {:?} in {}",
+        fs,
+        bcfile.to_string_lossy()
+    );
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);
@@ -748,7 +763,13 @@ fn mangle_functions(
 ) -> CVResult<Vec<(String, String)>> {
     let names: HashSet<&str> = names.iter().map(AsRef::as_ref).collect();
 
-    info_at!(&opt, 4, "    Looking up {:?} in {}", names, bcfile.to_string_lossy());
+    info_at!(
+        &opt,
+        4,
+        "    Looking up {:?} in {}",
+        names,
+        bcfile.to_string_lossy()
+    );
 
     let mut cmd = Command::new("llvm-nm");
     cmd.arg("--defined-only").arg(bcfile);

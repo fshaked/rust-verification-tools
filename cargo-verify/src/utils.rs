@@ -11,7 +11,13 @@
 // core functionality).
 ////////////////////////////////////////////////////////////////////////////////
 
-use std::{borrow::{Borrow, ToOwned}, ffi::{OsStr, OsString}, path::{Path, PathBuf}, process::Command, str::Lines};
+use std::{
+    borrow::{Borrow, ToOwned},
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+    process::Command,
+    str::Lines,
+};
 
 use log::info;
 
@@ -31,7 +37,9 @@ pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
         "Running {} on '{}' with command `{} {}`",
         name,
-        cmd.get_current_dir().unwrap_or(&PathBuf::from(".")).to_string_lossy(),
+        cmd.get_current_dir()
+            .unwrap_or(&PathBuf::from("."))
+            .to_string_lossy(),
         cmd.get_program().to_string_lossy(),
         cmd.get_args()
             .map(|s| s.to_string_lossy())

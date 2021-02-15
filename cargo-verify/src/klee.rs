@@ -51,20 +51,11 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
         info!("     {}: {:?}", name, stats);
     }
 
-    lazy_static! {
-        static ref TEST_ERR: Regex = Regex::new(r"test.*\.err$").unwrap();
-        static ref TEST_KTEST: Regex = Regex::new(r"test.*\.ktest$").unwrap();
-    }
-
     // {out_dir}/test*.err
-    let mut failures = out_dir
-        .read_dir()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file() && TEST_ERR.is_match(p.file_name().unwrap().to_string_lossy().as_ref())
-        })
-        .collect::<Vec<_>>();
+    let mut failures =
+        glob(&glob::Pattern::escape(out_dir.to_str().ok_or("not UTF-8")?).append("/test*.err"))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
     failures.sort_unstable();
     info!("      Failing test: {:?}", failures);
 
@@ -72,15 +63,11 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
         // use -r -r to see all tests, not just failing tests
         let mut ktests = if opt.replay > 1 {
             // {out_dir}/test*.ktest
-            out_dir
-                .read_dir()?
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file()
-                        && TEST_KTEST.is_match(p.file_name().unwrap().to_string_lossy().as_ref())
-                })
-                .collect::<Vec<_>>()
+            glob(
+                &glob::Pattern::escape(out_dir.to_str().ok_or("not UTF-8")?).append("/test*.ktest"),
+            )?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
         } else {
             // Remove the '.err' extension and replace the '.*' ('.abort' or
             // '.ptr') with '.ktest'.
@@ -181,17 +168,11 @@ fn run(
         "--disable-verify", // workaround https://github.com/klee/klee/issues/937
     ])
     .arg("--output-dir")
-    .arg(out_dir);
-
-    match &opt.backend_flags {
-        // FIXME: I'm assuming multiple flags are comma separated?
-        Some(opt_flags) => {
-            cmd.args(opt_flags.split(',').collect::<Vec<&str>>());
-        }
-        None => (),
-    }
-
-    cmd.arg(bcfile).args(&opt.args).current_dir(&opt.crate_dir);
+    .arg(out_dir)
+    .args(&opt.backend_flags)
+    .arg(bcfile)
+    .args(&opt.args)
+    .current_dir(&opt.crate_dir);
 
     utils::info_cmd(&cmd, "KLEE");
 
@@ -265,7 +246,11 @@ fn run(
             Status::Unknown
         });
 
-    info!("Status: '{}' expected: '{}'", status, expect.unwrap_or("---"));
+    info!(
+        "Status: '{}' expected: '{}'",
+        status,
+        expect.unwrap_or("---")
+    );
 
     // Scan for statistics
     lazy_static! {

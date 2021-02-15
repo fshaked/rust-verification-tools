@@ -104,18 +104,9 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
     ]);
 
     cmd.arg(OsString::from("--temp-dir=").append(out_dir))
-        .arg(String::from("--entry=") + entry);
-
-    match &opt.backend_flags {
-        // FIXME: I'm assuming multiple flags are comma separated?
-        // Make sure this is also the case when using the cli arg multiple times.
-        Some(flags) => {
-            cmd.args(flags.split(',').collect::<Vec<&str>>());
-        }
-        None => (),
-    };
-
-    cmd.arg(&bcfile)
+        .arg(String::from("--entry=") + entry)
+        .args(&opt.backend_flags)
+        .arg(&bcfile)
         // .args(&opt.args)
         .current_dir(&opt.crate_dir);
 
@@ -172,7 +163,11 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
             Status::Unknown
         });
 
-    info!("Status: '{}' expected: '{}'", status, expect.unwrap_or("---"));
+    info!(
+        "Status: '{}' expected: '{}'",
+        status,
+        expect.unwrap_or("---")
+    );
 
     // TODO: Scan for statistics
 
