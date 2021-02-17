@@ -244,9 +244,9 @@ fn run(
         });
 
     info!(
-        "Status: '{}' expected: '{}'",
+        "Status: '{}' expected: '{:?}'",
         status,
-        expect.unwrap_or("---")
+        expect
     );
 
     // Scan for statistics
