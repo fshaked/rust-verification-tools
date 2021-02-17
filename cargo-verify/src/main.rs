@@ -670,7 +670,11 @@ fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
 
 fn get_default_host(crate_path: &Path) -> CVResult<String> {
     let mut cmd = Command::new("rustup");
-    cmd.arg("show").current_dir(crate_path);
+    cmd.arg("show");
+
+    if crate_path != PathBuf::from("") {
+        cmd.current_dir(crate_path);
+    }
 
     utils::info_cmd(&cmd, "rustup");
 
