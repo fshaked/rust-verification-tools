@@ -144,20 +144,20 @@ pub enum Status {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Status::Unknown => write!(f, "Unknown"),
+            Status::Unknown => write!(f, "UNKNOWN"),
             Status::Verified => {
                 if f.alternate() {
                     // "{:#}"
-                    write!(f, "ok")
+                    write!(f, "OK")
                 } else {
                     // "{}"
-                    write!(f, "Verified")
+                    write!(f, "VERIFIED")
                 }
             }
-            Status::Error => write!(f, "Error"),
-            Status::Timeout => write!(f, "Timeout"),
-            Status::Overflow => write!(f, "Overflow"),
-            Status::Reachable => write!(f, "Reachable"),
+            Status::Error => write!(f, "ERROR"),
+            Status::Timeout => write!(f, "TIMEOUT"),
+            Status::Overflow => write!(f, "OVERFLOW"),
+            Status::Reachable => write!(f, "REACHABLE"),
         }
     }
 }
