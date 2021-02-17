@@ -37,7 +37,6 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
             out_dir.to_string_lossy()
         ))?
     }
-    fs::create_dir_all(&out_dir)?;
 
     info!("     Running KLEE to verify {}", name);
     info!("      file: {}", bcfile.to_string_lossy());
