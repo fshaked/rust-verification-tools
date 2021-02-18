@@ -270,7 +270,7 @@ fn run(
         .collect();
 
     for l in stderr.lines() {
-        if importance(&l, &expect, &name) < opt.verbosity as i8 {
+        if importance(&l, &expect, &name) < opt.verbose as i8 {
             println!("{}", l);
         }
     }
@@ -281,10 +281,10 @@ fn run(
 /// Replay a KLEE "ktest" file
 fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("--manifest-path").arg(&opt.cargo_toml);
 
     if opt.tests || !opt.test.is_empty() {
-        cmd.arg("test");
+        cmd.arg("test")
+            .arg("--manifest-path").arg(&opt.cargo_toml);
 
         if !opt.features.is_empty() {
             cmd.arg("--features").arg(opt.features.join(","));
@@ -292,7 +292,8 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
 
         cmd.arg(&name).args(&["--", "--nocapture"]);
     } else {
-        cmd.arg("run");
+        cmd.arg("run")
+            .arg("--manifest-path").arg(&opt.cargo_toml);
 
         if !opt.features.is_empty() {
             cmd.arg("--features").arg(opt.features.join(","));
@@ -309,7 +310,13 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     };
     cmd.env("RUSTFLAGS", rustflags).env("KTEST_FILE", ktest);
 
-    cmd.output_info()?;
+    // Note that we do not treat this as an error, because
+    // the interesting case for replay is when KLEE had found an error.
+    let (stdout, stderr, _success) = cmd.output_info_ignore_exit()?;
+
+    for line in stdout.lines().chain(stderr.lines()) {
+        println!("{}", line);
+    }
 
     Ok(())
 }

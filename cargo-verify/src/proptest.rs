@@ -20,7 +20,7 @@ pub fn run(opt: &Opt) -> CVResult<Status> {
     cmd.arg("test")
         .arg("--manifest-path")
         .arg(&opt.cargo_toml)
-        .args(vec!["-v"; opt.verbosity]);
+        .args(vec!["-v"; opt.verbose]);
 
     if !opt.features.is_empty() {
         cmd.arg("--features").arg(opt.features.join(","));

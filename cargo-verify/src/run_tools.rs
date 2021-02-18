@@ -205,7 +205,7 @@ pub fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
     }
 
     cmd.arg(format!("--target={}", target))
-        .args(vec!["-v"; opt.verbosity])
+        .args(vec!["-v"; opt.verbose])
         .envs(get_build_envs(&opt)?)
         .args(&["--", "--list"]);
     // .arg("--exclude-should-panic")

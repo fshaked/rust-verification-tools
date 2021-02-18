@@ -169,7 +169,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
     // TODO: Scan for statistics
 
     for l in stderr.lines() {
-        if importance(&l, &expect, &name) < opt.verbosity as i8 {
+        if importance(&l, &expect, &name) < opt.verbose as i8 {
             println!("{}", l);
         }
     }

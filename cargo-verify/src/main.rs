@@ -117,9 +117,9 @@ pub struct Opt {
     #[structopt(short, long, parse(from_occurrences))]
     replay: usize,
 
-    /// Increase message verbosity
+    /// Use verbose output (-vvvvvv very verbose output)
     #[structopt(short, long, parse(from_occurrences))]
-    verbosity: usize,
+    verbose: usize,
 }
 
 arg_enum! {
@@ -249,7 +249,7 @@ fn process_command_line() -> CVResult<Opt> {
 /// Invoke a checker (verifier or fuzzer) on a crate.
 fn main() -> CVResult<()> {
     let opt = process_command_line()?;
-    stderrlog::new().verbosity(opt.verbosity).init()?;
+    stderrlog::new().verbosity(opt.verbose).init()?;
 
     if opt.clean {
         clean(&opt);
@@ -286,7 +286,7 @@ fn main() -> CVResult<()> {
 fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     // Compile and link the patched file using LTO to generate the entire
     // application in a single LLVM file
-    info_at!(&opt, 1, "  Building {} for verificatuin", package);
+    info_at!(&opt, 1, "  Building {} for verification", package);
     let bcfile = build(&opt, &package, &target)?;
 
     // Get the functions we need to verify, and their mangled names.
@@ -518,7 +518,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     // proc_macros.
     // FIXME: "=="?
     cmd.arg(format!("--target={}", target))
-        .args(vec!["-v"; opt.verbosity])
+        .args(vec!["-v"; opt.verbose])
         .envs(get_build_envs(&opt)?)
         .output_info()?;
     // .env("PATH", ...)
@@ -606,7 +606,7 @@ fn patch_llvm(opt: &Opt, options: &[&str], bcfile: &Path, new_bcfile: &Path) -> 
         .arg("-o")
         .arg(new_bcfile)
         .args(options)
-        .args(vec!["-v"; opt.verbosity])
+        .args(vec!["-v"; opt.verbose])
         .output_info()?;
     Ok(())
 }
