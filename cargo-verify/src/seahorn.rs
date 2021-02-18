@@ -12,6 +12,7 @@ use log::{info, warn};
 
 use crate::{utils::Append, *};
 
+/// Check if Seahorn is avilable.
 pub fn check_install() -> bool {
     // TODO: maybe it's better to check `seahorn --version`?
     let output = Command::new("which").arg("sea").output().ok();
@@ -22,6 +23,7 @@ pub fn check_install() -> bool {
     }
 }
 
+/// Run Seahorn
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
     let out_dir = opt.cargo_toml.with_file_name("seaout").append(name);
 
@@ -44,15 +46,15 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
     run(&opt, &name, &entry, &bcfile, &out_dir)
 }
 
-// Return an int indicating importance of a line from KLEE's output
-// Low numbers are most important, high numbers least important
-//
-// -1: script error (always shown)
-// 1: brief description of error
-// 2: long details about an error
-// 3: warnings
-// 4: non-KLEE output
-// 5: any other KLEE output
+/// Return an int indicating importance of a line from KLEE's output
+/// Low numbers are most important, high numbers least important
+///
+/// -1: script error (always shown)
+/// 1: brief description of error
+/// 2: long details about an error
+/// 3: warnings
+/// 4: non-KLEE output
+/// 5: any other KLEE output
 fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     if line.starts_with("VERIFIER_EXPECT:") {
         4
@@ -73,6 +75,7 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     }
 }
 
+/// Run Seahorn and analyse its output.
 fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVResult<Status> {
     let mut cmd = Command::new("sea");
     cmd.args(&["bpf",

@@ -14,6 +14,7 @@ use regex::Regex;
 
 use crate::{utils::Append, *};
 
+/// Check if Klee is avilable.
 pub fn check_install() -> bool {
     let output = Command::new("which").arg("klee").output().ok();
 
@@ -23,6 +24,7 @@ pub fn check_install() -> bool {
     }
 }
 
+/// Run Klee and replay
 pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Status> {
     let out_dir = opt.cargo_toml.with_file_name("kleeout").append(name);
 
@@ -93,15 +95,15 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
     Ok(status)
 }
 
-// Return an int indicating importance of a line from KLEE's output
-// Low numbers are most important, high numbers least important
-//
-// -1: script error (always shown)
-// 1: brief description of error
-// 2: long details about an error
-// 3: warnings
-// 4: non-KLEE output
-// 5: any other KLEE output
+/// Return an int indicating importance of a line from KLEE's output
+/// Low numbers are most important, high numbers least important
+///
+/// -1: script error (always shown)
+/// 1: brief description of error
+/// 2: long details about an error
+/// 3: warnings
+/// 4: non-KLEE output
+/// 5: any other KLEE output
 fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     if line.starts_with("VERIFIER_EXPECT:") {
         4
@@ -149,6 +151,7 @@ fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     }
 }
 
+/// Run Klee and analyse its output.
 fn run(
     opt: &Opt,
     name: &str,
@@ -284,7 +287,7 @@ fn run(
     Ok((status, stats))
 }
 
-// Replay a KLEE "ktest" file
+/// Replay a KLEE "ktest" file
 fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("--manifest-path").arg(&opt.cargo_toml);

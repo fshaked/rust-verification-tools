@@ -153,6 +153,7 @@ impl fmt::Display for Status {
 
 type CVResult<T> = Result<T, Box<dyn error::Error>>;
 
+/// Parse the command line and make sure it makes sense.
 fn process_command_line() -> CVResult<Opt> {
     // cargo-verify can be called directly, or by placing it on the `PATH` and
     // calling it through `cargo` (i.e. `cargo verify ...`.
@@ -234,6 +235,7 @@ fn process_command_line() -> CVResult<Opt> {
     Ok(opt)
 }
 
+/// Invoke a checker (verifier or fuzzer) on a crate.
 fn main() -> CVResult<()> {
     let opt = process_command_line()?;
     stderrlog::new().verbosity(opt.verbosity).init()?;
@@ -274,8 +276,8 @@ fn main() -> CVResult<()> {
     Ok(())
 }
 
-// Compile a Rust crate to generate bitcode
-// and run one of the LLVM verifier backends on the result.
+/// Compile a Rust crate to generate bitcode and run one of the LLVM verifier
+/// backends on the result.
 fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     // Compile and link the patched file using LTO to generate the entire
     // application in a single LLVM file
@@ -374,6 +376,8 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     Ok(status)
 }
 
+/// Invoke one of the supported verification backends on entry point 'entry'
+/// (with pretty name 'name') in bitcodefile 'bcfile'.
 fn verifier_run(opt: &Opt, bcfile: &Path, name: &str, entry: &str) -> Status {
     let status = match opt.backend {
         Backend::Klee => klee::verify(&opt, &name, &entry, &bcfile),
@@ -390,7 +394,7 @@ fn verifier_run(opt: &Opt, bcfile: &Path, name: &str, entry: &str) -> Status {
     status
 }
 
-// Compile, link and do transformations on LLVM bitcode.
+/// Compile, link and do transformations on LLVM bitcode.
 fn build(opt: &Opt, package: &str, target: &str) -> CVResult<PathBuf> {
     let (mut bc_file, c_files) = compile(&opt, &package, target)?;
 
@@ -436,6 +440,9 @@ fn build(opt: &Opt, package: &str, target: &str) -> CVResult<PathBuf> {
     Ok(bc_file)
 }
 
+/// Return the environment variables needed for building.  Each item in the
+/// vector is a pair `(a, b)` where `a` is the variable name and `b` is its
+/// value.
 fn get_build_envs(opt: &Opt) -> CVResult<Vec<(String, String)>> {
     let mut rustflags = vec![
         "-Clto", // Generate linked bitcode for entire crate
@@ -479,6 +486,9 @@ fn get_build_envs(opt: &Opt) -> CVResult<Vec<(String, String)>> {
     ])
 }
 
+/// Compile a crate for verification.
+/// Return a bcfile for the entire (linked) crate, and c object files that need
+/// to be linked with the bcfile.
 fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<PathBuf>)> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build").arg("--manifest-path").arg(&opt.cargo_toml);
@@ -583,7 +593,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     Ok((bc_file, c_files))
 }
 
-// Link multiple bitcode files together.
+/// Link multiple bitcode files together.
 fn link(out_file: &Path, in_files: &[PathBuf]) -> CVResult<()> {
     let mut cmd = Command::new("llvm-link");
     cmd.arg("-o").arg(out_file).args(in_files);
@@ -603,15 +613,13 @@ fn link(out_file: &Path, in_files: &[PathBuf]) -> CVResult<()> {
     Ok(())
 }
 
-// Patch LLVM file to enable verification
-//
-// While this varies a bit according to the backend, some of the patching
-// performed includes
-//
-// - arranging for initializers to be executed
-//   (this makes std::env::args() work)
-// - redirecting panic! to invoke backend-specific intrinsic functions
-//   for reporting errors
+/// Patch LLVM file to enable verification
+///
+/// Some of the patching performed includes:
+/// - arranging for initializers to be executed (this makes std::env::args()
+///   work)
+/// - redirecting panic! to invoke backend-specific intrinsic functions for
+///   reporting errors
 fn patch_llvm(opt: &Opt, options: &[&str], bcfile: &Path, new_bcfile: &Path) -> CVResult<()> {
     let mut cmd = Command::new("rvt-patch-llvm");
     cmd.arg(bcfile)
@@ -636,6 +644,7 @@ fn patch_llvm(opt: &Opt, options: &[&str], bcfile: &Path, new_bcfile: &Path) -> 
     Ok(())
 }
 
+/// Find the name of the crate.
 fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
     let name = MetadataCommand::new()
         .manifest_path(&opt.cargo_toml)
@@ -657,6 +666,7 @@ fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
     Ok(name)
 }
 
+/// Find the target directory.
 fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
     // FIXME: add '--cfg=verify' to RUSTFLAGS?
     let dir = MetadataCommand::new()
@@ -668,6 +678,9 @@ fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
     Ok(dir)
 }
 
+/// Get name of default_host.
+/// This is passed to cargo using "--target=..." and will be the name of the
+/// directory within the target directory.
 fn get_default_host(crate_path: &Path) -> CVResult<String> {
     let mut cmd = Command::new("rustup");
     cmd.arg("show");
@@ -696,7 +709,7 @@ fn get_default_host(crate_path: &Path) -> CVResult<String> {
         .to_string())
 }
 
-// Count how many functions in fs are present in bitcode file
+/// Count how many functions in `f`s are present in `bcfile`.
 fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
     info_at!(
         &opt,
@@ -729,8 +742,8 @@ fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
     count
 }
 
-// Generate a list of tests in the crate by parsing the output of `cargo test --
-// --list`
+/// Generate a list of tests in the crate by parsing the output of `cargo test
+/// -- --list`
 fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test").arg("--manifest-path").arg(&opt.cargo_toml);
@@ -774,8 +787,8 @@ fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
     Ok(tests)
 }
 
-// Find a function defined in LLVM bitcode file
-// Demangle all the function names, and compare tham to `names`.
+/// Find a function defined in LLVM bitcode file.
+/// Demangle all the function names, and compare tham to `names`.
 fn mangle_functions(
     opt: &Opt,
     bcfile: &Path,

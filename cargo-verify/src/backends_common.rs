@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use log::info;
 use regex::Regex;
 
-// Detect lines that match #[should_panic(expected = ...)] string
+/// Detect lines that match #[should_panic(expected = ...)] string.
 pub fn is_expected_panic(line: &str, expect: &Option<&str>, name: &str) -> bool {
     lazy_static! {
         static ref PANICKED: Regex = Regex::new(r" panicked at '([^']*)',\s+(.*)").unwrap();

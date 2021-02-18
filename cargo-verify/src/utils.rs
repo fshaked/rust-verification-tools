@@ -22,8 +22,8 @@ use std::{
 
 use log::info;
 
-// `info_at!(&opt, level, ...)` will print the formatted message `...` if
-// verbosity level is `level` or higher.
+/// `info_at!(&opt, level, ...)` will print the formatted message `...` if
+/// verbosity level is `level` or higher.
 macro_rules! info_at {
     ($opt:expr, $lvl:expr, $($arg:tt)+) => ({
         let lvl = $lvl;
@@ -33,7 +33,7 @@ macro_rules! info_at {
     });
 }
 
-// Use `info!` to print the `cmd`.
+/// Use `info!` to print the `cmd`.
 pub fn info_cmd(cmd: &Command, name: &str) {
     info!(
         "Running {} on '{}' with command:\n`{}`",
@@ -66,27 +66,27 @@ pub fn info_cmd(cmd: &Command, name: &str) {
     }
 }
 
-// Print each line of `Lines` using `info!`, prefixed with `prefix`.
+/// Print each line of `Lines` using `info!`, prefixed with `prefix`.
 pub fn info_lines(prefix: &str, lines: Lines) {
     for l in lines {
         info!("{}{}", prefix, l);
     }
 }
 
-// encoding_rs (https://docs.rs/encoding_rs/), seems to be the standard crate
-// for encoding/decoding, has this to say about ISO-8859-1: "ISO-8859-1 does not
-// exist as a distinct encoding from windows-1252 in the Encoding
-// Standard. Therefore, an encoding that maps the unsigned byte value to the
-// same Unicode scalar value is not available via Encoding in this crate."
-// The following is from https://stackoverflow.com/a/28175593
+/// encoding_rs (https://docs.rs/encoding_rs/), seems to be the standard crate
+/// for encoding/decoding, has this to say about ISO-8859-1: "ISO-8859-1 does not
+/// exist as a distinct encoding from windows-1252 in the Encoding
+/// Standard. Therefore, an encoding that maps the unsigned byte value to the
+/// same Unicode scalar value is not available via Encoding in this crate."
+/// The following is from https://stackoverflow.com/a/28175593
 pub fn from_latin1(s: &[u8]) -> String {
     s.iter().map(|&c| c as char).collect()
 }
 
-// The Append trait lets you chain `append` calls where usually you would have
-// to mutate (e.g. using `push`).
-// Example:
-// assert_eq!(String::from("foo").append("bar"), { let mut x = String::from("foo"); x.push_str("bar"); x })
+/// The Append trait lets you chain `append` calls where usually you would have
+/// to mutate (e.g. using `push`).
+/// Example:
+/// assert_eq!(String::from("foo").append("bar"), { let mut x = String::from("foo"); x.push_str("bar"); x })
 pub trait Append<Segment: ?Sized>: Sized
 where
     Segment: ToOwned<Owned = Self>,
@@ -95,7 +95,7 @@ where
     fn append(self: Self, s: impl AsRef<Segment>) -> Self;
 }
 
-// Concatenate `s` to the end of `self`.
+/// Concatenate `s` to the end of `self`.
 impl Append<str> for String {
     fn append(mut self: String, s: impl AsRef<str>) -> String {
         self.push_str(s.as_ref());
@@ -103,7 +103,7 @@ impl Append<str> for String {
     }
 }
 
-// Concatenate `s` to the end of `self`.
+/// Concatenate `s` to the end of `self`.
 impl Append<OsStr> for OsString {
     fn append(mut self: OsString, s: impl AsRef<OsStr>) -> OsString {
         self.push(s);
@@ -111,7 +111,7 @@ impl Append<OsStr> for OsString {
     }
 }
 
-// Add `s` to the end of `self`, as a new component.
+/// Add `s` to the end of `self`, as a new component.
 impl Append<Path> for PathBuf {
     fn append(mut self: PathBuf, s: impl AsRef<Path>) -> PathBuf {
         self.push(s);
