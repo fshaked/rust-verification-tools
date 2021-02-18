@@ -74,6 +74,7 @@ impl Append<Path> for PathBuf {
     }
 }
 
+/// Add `ext` to `file` just before the extension.
 /// Example:
 /// assert_eq!(add_pre_ext(&PathBuf::from("foo.bar"), "baz"), PathBuf::from("foo.baz.bar"))
 pub fn add_pre_ext(file: &Path, ext: impl AsRef<OsStr>) -> PathBuf {

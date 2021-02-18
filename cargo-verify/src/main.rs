@@ -133,9 +133,9 @@ arg_enum! {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Status {
-    Unknown, // E.g. the varifier failed to execute.
+    Unknown, // E.g. the verifier failed to execute.
     Verified,
-    Error, // E.g. the varifier found a violation.
+    Error, // E.g. the verifier found a violation.
     Timeout,
     Overflow,
     Reachable,
@@ -322,7 +322,8 @@ fn verify(opt: &Opt, package: &str, target: &str) -> CVResult<Status> {
     } else {
         vec![("main".to_string(), "main".to_string())]
     };
-    // Remove the package name from the function names (important for Klee?).
+
+    // Remove the package name from the function names (important for Klee?) in tests.
     let tests: Vec<_> = tests
         .into_iter()
         .map(|(name, mangled)| {

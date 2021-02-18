@@ -53,8 +53,8 @@ pub fn verify(opt: &Opt, name: &str, entry: &str, bcfile: &Path) -> CVResult<Sta
 /// 1: brief description of error
 /// 2: long details about an error
 /// 3: warnings
-/// 4: non-KLEE output
-/// 5: any other KLEE output
+/// 4: non-Seahorn output
+/// 5: any other Seahorn output
 fn importance(line: &str, expect: &Option<&str>, name: &str) -> i8 {
     if line.starts_with("VERIFIER_EXPECT:") {
         4
