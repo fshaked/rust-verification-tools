@@ -110,7 +110,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
         .arg(String::from("--entry=") + entry)
         .args(&opt.backend_flags)
         .arg(&bcfile);
-        // .args(&opt.args)
+    // .args(&opt.args)
 
     let (stdout, stderr, _) = cmd.output_info_ignore_exit()?;
 

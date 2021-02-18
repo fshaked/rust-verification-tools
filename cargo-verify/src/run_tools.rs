@@ -24,11 +24,19 @@ pub trait OutputInfo {
         self.output_info_helper(utils::from_latin1, true)
     }
 
-    fn output_info_helper(&mut self, trans: impl Fn(&[u8]) -> String, ignore_exit: bool) -> CVResult<(String, String, bool)>;
+    fn output_info_helper(
+        &mut self,
+        trans: impl Fn(&[u8]) -> String,
+        ignore_exit: bool,
+    ) -> CVResult<(String, String, bool)>;
 }
 
 impl OutputInfo for Command {
-    fn output_info_helper(&mut self, trans: impl Fn(&[u8]) -> String, ignore_exit: bool) -> CVResult<(String, String, bool)> {
+    fn output_info_helper(
+        &mut self,
+        trans: impl Fn(&[u8]) -> String,
+        ignore_exit: bool,
+    ) -> CVResult<(String, String, bool)> {
         info_cmd(&self);
 
         let output = self.output()?;
@@ -41,8 +49,15 @@ impl OutputInfo for Command {
 
         if !ignore_exit && !output.status.success() {
             match output.status.code() {
-                Some(code) => Err(format!("FAILED: '{}' terminated with exit code {}.", self.get_program().to_string_lossy(), code))?,
-                None => Err(format!("FAILED: '{}' terminated by a signal.", self.get_program().to_string_lossy()))?,
+                Some(code) => Err(format!(
+                    "FAILED: '{}' terminated with exit code {}.",
+                    self.get_program().to_string_lossy(),
+                    code
+                ))?,
+                None => Err(format!(
+                    "FAILED: '{}' terminated by a signal.",
+                    self.get_program().to_string_lossy()
+                ))?,
             }
         }
 
@@ -94,11 +109,11 @@ pub fn info_lines(prefix: &str, lines: Lines) {
 pub fn clean(opt: &Opt) {
     info_at!(&opt, 1, "Running `cargo clean`");
     Command::new("cargo")
-            .arg("clean")
-            .arg("--manifest-path")
-            .arg(&opt.cargo_toml)
-            .output_info_ignore_exit()
-            .ok(); // Discarding the error on purpose.
+        .arg("clean")
+        .arg("--manifest-path")
+        .arg(&opt.cargo_toml)
+        .output_info_ignore_exit()
+        .ok(); // Discarding the error on purpose.
 }
 
 /// Find the name of the crate.
@@ -146,7 +161,9 @@ pub fn get_default_host(crate_path: &Path) -> CVResult<String> {
         cmd.current_dir(crate_path);
     }
 
-    Ok(cmd.output_info()?.0
+    Ok(cmd
+        .output_info()?
+        .0
         .lines()
         .find_map(|l| l.strip_prefix("Default host:").and_then(|l| Some(l.trim())))
         .ok_or("Unable to determine default host")?
@@ -199,7 +216,9 @@ pub fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
     }
 
     // TODO: Python ignores bad exit codes
-    let tests =  cmd.output_info()?.0
+    let tests = cmd
+        .output_info()?
+        .0
         .lines()
         .filter_map(|l| {
             TEST.captures(l)

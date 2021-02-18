@@ -26,6 +26,8 @@ use rustc_demangle::demangle;
 use structopt::{clap::arg_enum, StructOpt};
 use utils::{add_pre_ext, Append};
 
+// utils must come before the other modules as it defines macros that they might
+// use.
 #[macro_use]
 mod utils;
 
@@ -48,7 +50,12 @@ pub struct Opt {
     // TODO: make this more like 'cargo test --manifest-path <PATH>'
     // (i.e., path to Cargo.toml)
     /// Path to Cargo.toml
-    #[structopt(long = "manifest-path", name = "PATH", parse(from_os_str), default_value = "Cargo.toml")]
+    #[structopt(
+        long = "manifest-path",
+        name = "PATH",
+        parse(from_os_str),
+        default_value = "Cargo.toml"
+    )]
     cargo_toml: PathBuf,
 
     /// Arguments to pass to program under test
@@ -413,7 +420,12 @@ fn build(opt: &Opt, package: &str, target: &str) -> CVResult<PathBuf> {
             new_bc_file.to_string_lossy()
         );
         // Link multiple bitcode files together.
-        Command::new("llvm-link").arg("-o").arg(&new_bc_file).arg(&bc_file).args(&c_files).output_info()?;
+        Command::new("llvm-link")
+            .arg("-o")
+            .arg(&new_bc_file)
+            .arg(&bc_file)
+            .args(&c_files)
+            .output_info()?;
         bc_file = new_bc_file;
     }
 
@@ -616,7 +628,9 @@ fn mangle_functions(
     );
 
     let (stdout, _) = Command::new("llvm-nm")
-        .arg("--defined-only").arg(bcfile).output_info()?;
+        .arg("--defined-only")
+        .arg(bcfile)
+        .output_info()?;
 
     let rs: Vec<(String, String)> = stdout
         .lines()
