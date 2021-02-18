@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{ffi::OsString, fs, path::Path, process::Command, str::from_utf8};
+use std::{ffi::OsString, fs, path::Path, process::Command};
 
 use log::{info, warn};
 
@@ -112,12 +112,7 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
         .arg(&bcfile);
         // .args(&opt.args)
 
-    utils::info_cmd(&cmd, "Seahorn");
-
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout)?;
-    let stderr = from_utf8(&output.stderr)?;
+    let (stdout, stderr, _) = cmd.output_info_ignore_exit()?;
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -172,8 +167,6 @@ fn run(opt: &Opt, name: &str, entry: &str, bcfile: &Path, out_dir: &Path) -> CVR
     );
 
     // TODO: Scan for statistics
-
-    utils::info_lines("STDOUT: ", stdout.lines());
 
     for l in stderr.lines() {
         if importance(&l, &expect, &name) < opt.verbosity as i8 {

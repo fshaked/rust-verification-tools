@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{collections::HashMap, ffi::OsString, fs, path::Path, process::Command, str::from_utf8};
+use std::{collections::HashMap, ffi::OsString, fs, path::Path, process::Command};
 
 use lazy_static::lazy_static;
 use log::{info, warn};
@@ -159,30 +159,24 @@ fn run(
     bcfile: &Path,
     out_dir: &Path,
 ) -> CVResult<(Status, HashMap<String, isize>)> {
-    let mut cmd = Command::new("klee");
-    cmd.args(&[
-        "--exit-on-error",
-        "--entry-point",
-        entry,
-        // "--posix-runtime",
-        // "--libcxx",
-        "--libc=klee",
-        "--silent-klee-assume",
-        "--disable-verify", // workaround https://github.com/klee/klee/issues/937
-    ])
-    .arg("--output-dir")
-    .arg(out_dir)
-    .args(&opt.backend_flags)
-    .arg(bcfile)
-    .args(&opt.args);
-    // .current_dir(&opt.crate_dir);
-
-    utils::info_cmd(&cmd, "KLEE");
-
-    let output = cmd.output()?;
-
-    let stdout = utils::from_latin1(&output.stdout);
-    let stderr = utils::from_latin1(&output.stderr);
+    let (_, stderr, _) = Command::new("klee")
+        .args(&[
+            "--exit-on-error",
+            "--entry-point",
+            entry,
+            // "--posix-runtime",
+            // "--libcxx",
+            "--libc=klee",
+            "--silent-klee-assume",
+            "--disable-verify", // workaround https://github.com/klee/klee/issues/937
+        ])
+        .arg("--output-dir")
+        .arg(out_dir)
+        .args(&opt.backend_flags)
+        .arg(bcfile)
+        .args(&opt.args)
+        // .current_dir(&opt.crate_dir);
+        .latin1_output_info_ignore_exit()?;
 
     // We scan stderr for:
     // 1. Indications of the expected output (eg from #[should_panic])
@@ -276,8 +270,6 @@ fn run(
         })
         .collect();
 
-    utils::info_lines("STDOUT: ", stdout.lines());
-
     for l in stderr.lines() {
         if importance(&l, &expect, &name) < opt.verbosity as i8 {
             println!("{}", l);
@@ -318,17 +310,7 @@ fn replay_klee(opt: &Opt, name: &str, ktest: &Path) -> CVResult<()> {
     };
     cmd.env("RUSTFLAGS", rustflags).env("KTEST_FILE", ktest);
 
-    utils::info_cmd(&cmd, "Replay");
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout)?;
-    let stderr = from_utf8(&output.stderr)?;
-
-    if !output.status.success() {
-        utils::info_lines("STDOUT: ", stdout.lines());
-        utils::info_lines("STDERR: ", stderr.lines());
-        Err("FAILED: Couldn't replay")?
-    }
+    cmd.output_info()?;
 
     Ok(())
 }

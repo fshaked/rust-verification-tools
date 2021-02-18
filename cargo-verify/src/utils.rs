@@ -14,13 +14,8 @@
 use std::{
     borrow::{Borrow, ToOwned},
     ffi::{OsStr, OsString},
-    iter,
     path::{Path, PathBuf},
-    process::Command,
-    str::Lines,
 };
-
-use log::info;
 
 /// `info_at!(&opt, level, ...)` will print the formatted message `...` if
 /// verbosity level is `level` or higher.
@@ -31,46 +26,6 @@ macro_rules! info_at {
             println!($($arg)+);
         }
     });
-}
-
-/// Use `info!` to print the `cmd`.
-pub fn info_cmd(cmd: &Command, name: &str) {
-    info!(
-        "Running {} on '{}' with command:\n`{}`",
-        name,
-        cmd.get_current_dir()
-            .unwrap_or(&PathBuf::from("."))
-            .to_string_lossy(),
-        iter::once(cmd.get_program())
-            .chain(cmd.get_args())
-            .map(|s| shell_escape::escape(s.to_string_lossy()))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-
-    let envs = cmd.get_envs();
-    if envs.len() > 0 {
-        info!(
-            "with environment variables:\n{}",
-            envs.map(|(var, val)| match val {
-                Some(val) => format!(
-                    "{}={}",
-                    var.to_string_lossy(),
-                    shell_escape::escape(val.to_string_lossy())
-                ),
-                None => format!("{}=''", var.to_string_lossy()), // explicitly removed
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-        );
-    }
-}
-
-/// Print each line of `Lines` using `info!`, prefixed with `prefix`.
-pub fn info_lines(prefix: &str, lines: Lines) {
-    for l in lines {
-        info!("{}{}", prefix, l);
-    }
 }
 
 /// encoding_rs (https://docs.rs/encoding_rs/), seems to be the standard crate

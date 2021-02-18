@@ -28,10 +28,14 @@ use utils::{add_pre_ext, Append};
 
 #[macro_use]
 mod utils;
+
 mod backends_common;
 mod klee;
 mod proptest;
+mod run_tools;
 mod seahorn;
+
+use run_tools::*;
 
 // Command line arguments
 #[derive(StructOpt)]
@@ -241,13 +245,7 @@ fn main() -> CVResult<()> {
     stderrlog::new().verbosity(opt.verbosity).init()?;
 
     if opt.clean {
-        info_at!(&opt, 1, "Running `cargo clean`");
-        Command::new("cargo")
-            .arg("clean")
-            .arg("--manifest-path")
-            .arg(&opt.cargo_toml)
-            .output()
-            .ok(); // Discarding the error on purpose.
+        clean(&opt);
     }
 
     let package = get_meta_package_name(&opt)?;
@@ -414,7 +412,8 @@ fn build(opt: &Opt, package: &str, target: &str) -> CVResult<PathBuf> {
                 .join(", "),
             new_bc_file.to_string_lossy()
         );
-        link(&new_bc_file, &[vec![bc_file], c_files].concat())?;
+        // Link multiple bitcode files together.
+        Command::new("llvm-link").arg("-o").arg(&new_bc_file).arg(&bc_file).args(&c_files).output_info()?;
         bc_file = new_bc_file;
     }
 
@@ -507,21 +506,9 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     // FIXME: "=="?
     cmd.arg(format!("--target={}", target))
         .args(vec!["-v"; opt.verbosity])
-        .envs(get_build_envs(&opt)?);
+        .envs(get_build_envs(&opt)?)
+        .output_info()?;
     // .env("PATH", ...)
-
-    utils::info_cmd(&cmd, "cargo");
-
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if !output.status.success() {
-        utils::info_lines("STDOUT: ", stdout.lines());
-        utils::info_lines("STDERR: ", stderr.lines());
-        Err("FAILED: Couldn't compile")?
-    }
 
     // Find the target directory
     // (This may not be inside the crate if using workspaces)
@@ -543,7 +530,7 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
         .append("*.bc"),
     )?
     .filter_map(Result::ok)
-    .filter(|p| count_symbols(&opt, p, &["main", "_main"]) > 0)
+    .filter(|p| count_symbols(&opt, p, &["main", "_main"]).map_or(false, |c| c > 0))
     .collect::<Vec<_>>();
 
     // Make sure there is only one such file.
@@ -593,26 +580,6 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     Ok((bc_file, c_files))
 }
 
-/// Link multiple bitcode files together.
-fn link(out_file: &Path, in_files: &[PathBuf]) -> CVResult<()> {
-    let mut cmd = Command::new("llvm-link");
-    cmd.arg("-o").arg(out_file).args(in_files);
-
-    utils::info_cmd(&cmd, "llvm-link");
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if !output.status.success() {
-        utils::info_lines("STDOUT: ", stdout.lines());
-        utils::info_lines("STDERR: ", stderr.lines());
-        Err("FAILED: Couldn't link")?
-    }
-
-    Ok(())
-}
-
 /// Patch LLVM file to enable verification
 ///
 /// Some of the patching performed includes:
@@ -621,170 +588,14 @@ fn link(out_file: &Path, in_files: &[PathBuf]) -> CVResult<()> {
 /// - redirecting panic! to invoke backend-specific intrinsic functions for
 ///   reporting errors
 fn patch_llvm(opt: &Opt, options: &[&str], bcfile: &Path, new_bcfile: &Path) -> CVResult<()> {
-    let mut cmd = Command::new("rvt-patch-llvm");
-    cmd.arg(bcfile)
+    Command::new("rvt-patch-llvm")
+        .arg(bcfile)
         .arg("-o")
         .arg(new_bcfile)
         .args(options)
-        .args(vec!["-v"; opt.verbosity]);
-
-    utils::info_cmd(&cmd, "rvt-patch-llvm");
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    utils::info_lines("STDOUT: ", stdout.lines());
-    utils::info_lines("STDERR: ", stderr.lines());
-
-    if !output.status.success() {
-        Err("FAILED: Couldn't run rvt-patch-llvm")?
-    }
-
-    Ok(())
-}
-
-/// Find the name of the crate.
-fn get_meta_package_name(opt: &Opt) -> CVResult<String> {
-    let name = MetadataCommand::new()
-        .manifest_path(&opt.cargo_toml)
-        .features(CargoOpt::SomeFeatures(opt.features.clone()))
-        .exec()?
-        .root_package()
-        .ok_or("no root package")?
-        .name
-        .replace(
-            |c| match c {
-                // Allowed characters.
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => false,
-                // Anything else will be replaced with the '_' character.
-                _ => true,
-            },
-            "_",
-        );
-
-    Ok(name)
-}
-
-/// Find the target directory.
-fn get_meta_target_directory(opt: &Opt) -> CVResult<PathBuf> {
-    // FIXME: add '--cfg=verify' to RUSTFLAGS?
-    let dir = MetadataCommand::new()
-        .manifest_path(&opt.cargo_toml)
-        .features(CargoOpt::SomeFeatures(opt.features.clone()))
-        .exec()?
-        .target_directory;
-
-    Ok(dir)
-}
-
-/// Get name of default_host.
-/// This is passed to cargo using "--target=..." and will be the name of the
-/// directory within the target directory.
-fn get_default_host(crate_path: &Path) -> CVResult<String> {
-    let mut cmd = Command::new("rustup");
-    cmd.arg("show");
-
-    if crate_path != PathBuf::from("") {
-        cmd.current_dir(crate_path);
-    }
-
-    utils::info_cmd(&cmd, "rustup");
-
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if !output.status.success() {
-        utils::info_lines("STDERR: ", stderr.lines());
-        utils::info_lines("STDOUT: ", stdout.lines());
-        Err("`rustup show` terminated unsuccessfully")?
-    }
-
-    Ok(stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("Default host:").and_then(|l| Some(l.trim())))
-        .ok_or("Unable to determine default host")?
-        .to_string())
-}
-
-/// Count how many functions in `f`s are present in `bcfile`.
-fn count_symbols(opt: &Opt, bcfile: &Path, fs: &[&str]) -> usize {
-    info_at!(
-        &opt,
-        4,
-        "    Counting symbols {:?} in {}",
-        fs,
-        bcfile.to_string_lossy()
-    );
-
-    let mut cmd = Command::new("llvm-nm");
-    cmd.arg("--defined-only").arg(bcfile);
-
-    utils::info_cmd(&cmd, "llvm-nm");
-
-    let output = cmd.output().expect("Failed to execute `llvm-nm`");
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    // let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    // TODO:
-    // if ! output.status.success() {
-
-    let count = stdout
-        .lines()
-        .map(|l| l.split(" ").collect::<Vec<_>>())
-        .filter(|l| l.len() == 3 && l[1] == "T" && fs.iter().any(|f| f == &l[2]))
-        .count();
-
-    info_at!(&opt, 4, "    Found {} functions", count);
-    count
-}
-
-/// Generate a list of tests in the crate by parsing the output of `cargo test
-/// -- --list`
-fn list_tests(opt: &Opt, target: &str) -> CVResult<Vec<String>> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("test").arg("--manifest-path").arg(&opt.cargo_toml);
-
-    if !opt.features.is_empty() {
-        cmd.arg("--features").arg(opt.features.join(","));
-    }
-
-    cmd.arg(format!("--target={}", target))
         .args(vec!["-v"; opt.verbosity])
-        .envs(get_build_envs(&opt)?)
-        .args(&["--", "--list"]);
-    // .arg("--exclude-should-panic")
-    // .env("PATH", ...)
-
-    utils::info_cmd(&cmd, "cargo");
-
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if false && !output.status.success() {
-        utils::info_lines("STDOUT: ", stdout.lines());
-        utils::info_lines("STDERR: ", stderr.lines());
-        Err("Couldn't get list of tests")?;
-    }
-
-    lazy_static! {
-        static ref TEST: Regex = Regex::new(r"(\S+):\s+test\s*$").unwrap();
-    }
-
-    let tests = stdout
-        .lines()
-        .filter_map(|l| {
-            TEST.captures(l)
-                .map(|caps| caps.get(1).unwrap().as_str().into())
-        })
-        .collect();
-
-    Ok(tests)
+        .output_info()?;
+    Ok(())
 }
 
 /// Find a function defined in LLVM bitcode file.
@@ -804,20 +615,8 @@ fn mangle_functions(
         bcfile.to_string_lossy()
     );
 
-    let mut cmd = Command::new("llvm-nm");
-    cmd.arg("--defined-only").arg(bcfile);
-
-    utils::info_cmd(&cmd, "llvm-nm");
-    let output = cmd.output()?;
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if !output.status.success() {
-        utils::info_lines("STDOUT: ", stdout.lines());
-        utils::info_lines("STDERR: ", stderr.lines());
-        Err("FAILED: Couldn't run llvm-nm")?
-    }
+    let (stdout, _) = Command::new("llvm-nm")
+        .arg("--defined-only").arg(bcfile).output_info()?;
 
     let rs: Vec<(String, String)> = stdout
         .lines()

@@ -6,12 +6,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use log::warn;
+
 use crate::*;
 
 pub fn check_install() -> bool {
     true
 }
 
+/// Run cargo test
 pub fn run(opt: &Opt) -> CVResult<Status> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test")
@@ -38,24 +41,22 @@ pub fn run(opt: &Opt) -> CVResult<Status> {
         cmd.arg("--").args(&opt.args);
     }
 
-    utils::info_cmd(&cmd, "Proptest");
-
-    let output = cmd.output().expect("Failed to execute `cargo`");
-
-    let stdout = from_utf8(&output.stdout).expect("stdout is not in UTF-8");
-    let stderr = from_utf8(&output.stderr).expect("stderr is not in UTF-8");
-
-    if !output.status.success() {
-        utils::info_lines("STDERR: ", stderr.lines());
-        utils::info_lines("STDOUT: ", stdout.lines());
-
-        for l in stderr.lines() {
-            if l.contains("with overflow") {
-                return Ok(Status::Overflow);
+    match cmd.output_info_ignore_exit() {
+        Err(e) => {
+            warn!("Proptest failed '{:?}'", e);
+            Ok(Status::Error)
+        }
+        Ok((_, stderr, success)) => {
+            if !success {
+                for l in stderr.lines() {
+                    if l.contains("with overflow") {
+                        return Ok(Status::Overflow);
+                    }
+                }
+                Ok(Status::Error)
+            } else {
+                Ok(Status::Verified)
             }
         }
-        Ok(Status::Error)
-    } else {
-        Ok(Status::Verified)
     }
 }
