@@ -529,6 +529,9 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
     let target_dir = get_meta_target_directory(&opt)?;
 
     // {target_dir}/{target}/debug/deps/{package}*.bc
+    // where the file name has exactly one 1 '.' (because later we add similar
+    // files, with multiple dots, and we don't want them here)
+    // and the file has a main function.
     let bc_files = glob(
         &glob::Pattern::escape(
             target_dir
@@ -543,6 +546,8 @@ fn compile(opt: &Opt, package: &str, target: &str) -> CVResult<(PathBuf, Vec<Pat
         .append("*.bc"),
     )?
     .filter_map(Result::ok)
+    // Filter only files that have exactly one '.'
+    .filter(|p| p.file_name().map(|f| f.to_string_lossy().matches('.').count() == 1).unwrap_or(false))
     .filter(|p| count_symbols(&opt, p, &["main", "_main"]).map_or(false, |c| c > 0))
     .collect::<Vec<_>>();
 
