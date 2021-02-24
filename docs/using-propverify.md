@@ -64,7 +64,7 @@ cd try-propverify
 cat >> Cargo.toml  << "EOF"
 
 [target.'cfg(verify)'.dependencies]
-propverify = { git = "https://github.com/project-oak/rust-verification-tools", branch = "main" }
+propverify = { path="/home/rust-verification-tools/propverify" }
 
 [target.'cfg(not(verify))'.dependencies]
 proptest = { version = "*" }
